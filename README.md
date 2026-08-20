@@ -11,20 +11,14 @@ opencode's SQLite store and interleaves them into a single stream, each run of b
 opening under a banner naming the session it belongs to. A subagent's tag ends in `↓` and
 its banner rule is dashed rather than solid.
 
-The database is opened **read-only**. Message bodies are printed exactly as the agent
-received them — whatever a bridge prepends to a prompt is printed along with it.
-
 ## Install
 
 Grab an archive for your platform from the
-[releases page](https://github.com/Chi-teck/oc-transcript/releases) — linux,
-darwin and windows, amd64 and arm64 — or build from source:
+[releases page](https://github.com/Chi-teck/oc-transcript/releases) or build from source:
 
 ```bash
 CGO_ENABLED=0 go build -o oc-transcript .   # or: task build
 ```
-
-`modernc.org/sqlite` is pure Go, so no cgo and the binary is static.
 
 ## Usage
 
@@ -62,11 +56,6 @@ the root and takes the whole database.
   │
   │ Fixed — the cursor now only advances past printed rows.
 ```
-
-Every line fits the terminal: columns are budgeted against its width and long lines
-wrap onto their own indent. Colour says what a line is — banner, prompt, reply, label,
-value — never which session it came from; sessions are told apart by their tag.
-Structure is drawn in characters, so it survives `--color never`.
 
 The flag before a tag says where the rest of that session is:
 
