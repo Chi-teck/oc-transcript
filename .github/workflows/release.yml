@@ -1,0 +1,45 @@
+# Publishes a GitHub release when a v* tag is pushed: cross-compiled archives
+# for linux, darwin and windows, amd64 and arm64 — tar.gz everywhere but zip on
+# windows — plus checksums.txt and a changelog built from the commits since the
+# previous tag. Configured in .goreleaser.yml.
+#
+#   git tag -a v1.0.0 -m 'v1.0.0' && git push origin v1.0.0
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+# Read by default; the one job that needs to write says so for itself.
+permissions:
+  contents: read
+
+jobs:
+  # The same gate CI runs, so a tag cannot publish a build that does not pass
+  # it. Reused rather than copied — ci.yml is the only place it is written out.
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: release
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release and upload the archives
+    steps:
+      # Full history and tags: the changelog is the commits since the previous
+      # tag, and a shallow clone has neither.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          version: '~> v2'
+          args: 'release --clean'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,90 @@
+# The pre-commit gate, run on GitHub: gofmt, go vet, golangci-lint, go test —
+# plus the documented build. The same four checks as `task check`, spelled out
+# here rather than shelled through Task so a failure names the step that failed
+# and no extra tool has to be installed on the runner. Keep the two in step.
+name: CI
+
+on:
+  push:
+    branches: ['main', '*.x']
+  pull_request:
+  # release.yml runs this gate before it publishes anything.
+  workflow_call:
+
+# Nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A new push supersedes the run still in flight for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # go.mod is the single source of the toolchain version; setup-go caches
+      # the module and build caches on its own.
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # `gofmt -l` reports offending files and still exits 0, so the file list
+      # has to be the failure condition.
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "not gofmt'd:"
+            echo "$files"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # Pinned rather than floating: a lint release adds checks, and CI going
+      # red on a commit that passed locally is the wrong way to learn that.
+      # Bump this together with the locally installed golangci-lint.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+
+      # Golden files under testdata/ fix the expected output; regenerate them
+      # with `task test:update` when a change to the rendering is intended.
+      - name: go test
+        run: go test ./...
+
+      # CGO_ENABLED=0 is the documented build: modernc.org/sqlite is pure Go,
+      # so the binary stays static.
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o oc-transcript .
+
+  # The release ships a windows archive, and the two things that could break it
+  # there — the path separator the session scoping matches on, and a golden file
+  # compared byte for byte — only fail on a windows runner. Tests and build
+  # only: gofmt, vet and lint read the same source on any platform.
+  windows:
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: go test
+        run: go test ./...
+
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o oc-transcript.exe .

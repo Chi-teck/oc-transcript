@@ -1,0 +1,18 @@
+# Built binary — `task build` / `go build -o oc-transcript .` drops it here.
+# Anchored so it can only match the artifact at the repo root.
+/oc-transcript
+
+# Release archives — `task release:snapshot` / goreleaser write them here.
+/dist/
+
+# Go test and coverage artifacts
+*.test
+*.out
+
+# Editors and IDEs
+.idea/
+
+# Agent instructions and local working notes
+/.claude/
+/local/
+

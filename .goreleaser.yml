@@ -1,0 +1,55 @@
+# Release build for oc-transcript — https://goreleaser.com
+#
+# Driven by .github/workflows/release.yml on a v* tag. To see what a release
+# would produce without tagging or publishing anything:
+#
+#   goreleaser release --snapshot --clean
+version: 2
+
+project_name: oc-transcript
+
+before:
+  hooks:
+    - 'go mod download'
+
+builds:
+  # CGO_ENABLED=0 is the documented build: modernc.org/sqlite is pure Go, so
+  # every target below cross-compiles from the Linux runner and the binaries
+  # stay static. -trimpath keeps the build machine's paths out of them.
+  #
+  # windows is in because the default database path holds there too: opencode
+  # resolves its data directory with xdg-basedir, which has no Windows branch,
+  # so the store sits under %USERPROFILE%\.local\share\opencode — the same
+  # place defaultDB() looks. It is built and tested on a runner of its own in
+  # ci.yml rather than taken on trust.
+  - env:
+      - 'CGO_ENABLED=0'
+    goos: ['linux', 'darwin', 'windows']
+    goarch: ['amd64', 'arm64']
+    flags: ['-trimpath']
+    ldflags: ['-s -w', '-X github.com/Chi-teck/oc-transcript/internal/app.version={{ .Version }}']
+
+archives:
+  - formats: ['tar.gz']
+    # zip on windows: a tar.gz needs a tool that is not in the box there.
+    format_overrides:
+      - goos: 'windows'
+        formats: ['zip']
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    files: ['README.md', 'LICENSE']
+
+checksum:
+  name_template: 'checksums.txt'
+
+changelog:
+  use: 'github'
+  sort: 'asc'
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  # A tag carrying a pre-release suffix (v1.0.0-rc1) is published as one.
+  prerelease: 'auto'

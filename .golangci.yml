@@ -1,0 +1,16 @@
+# golangci-lint's defaults plus the analyzers that catch what this package
+# would otherwise re-learn by hand: modernize spots stdlib features newer than
+# the code that predates them, and the other two guard idiom and stdlib
+# constants. Both Taskfile.yml's `lint` task and .github/workflows/ci.yml run
+# a bare `golangci-lint run`, so this file is the only place the set is named.
+#
+# Keep the version in step with the golangci-lint pinned in ci.yml.
+version: "2"
+
+linters:
+  # standard = errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - modernize
+    - gocritic
+    - usestdlibvars

@@ -1,0 +1,86 @@
+# Taskfile for the oc-transcript project — https://taskfile.dev
+# Run `task` (or `task --list`) to see available commands.
+#
+# The pre-commit gate is the checks list in .claude/CLAUDE.md: gofmt, go vet,
+# golangci-lint, go test.
+version: '3'
+
+vars:
+  BINARY: oc-transcript
+
+tasks:
+  default:
+    desc: 'List available tasks'
+    cmds:
+      - 'task --list'
+    silent: true
+
+  # CGO_ENABLED=0 is the documented build command: modernc.org/sqlite is pure
+  # Go, so nothing needs cgo and the binary stays static.
+  #
+  # No sources/generates fingerprint: `go build` is already incremental, and a
+  # fingerprint that ignores build env reports "up to date" when it is not.
+  build:
+    desc: 'Build the binary into ./{{.BINARY}} (static)'
+    env:
+      CGO_ENABLED: '0'
+    cmds:
+      - 'go build -o {{.BINARY}} .'
+
+  run:
+    desc: 'Run the transcript tool (e.g. `task run -- --tools full`)'
+    cmds:
+      - 'go run . {{.CLI_ARGS}}'
+
+  # Everything a v* tag would publish, built into ./dist and published
+  # nowhere. Needs goreleaser on PATH; CI installs its own.
+  release:snapshot:
+    desc: 'Build the release archives locally without publishing'
+    cmds:
+      - 'goreleaser release --snapshot --clean'
+
+  test:
+    desc: 'Run tests (golden files under testdata/)'
+    cmds:
+      - 'go test ./...'
+
+  test:update:
+    desc: 'Regenerate the golden files, then re-run the tests'
+    cmds:
+      - 'go test ./... -update'
+      - 'go test ./...'
+
+  lint:
+    desc: 'Run go vet and golangci-lint'
+    cmds:
+      - 'go vet ./...'
+      - 'golangci-lint run'
+
+  fmt:
+    desc: 'Format the code (gofmt)'
+    cmds:
+      - 'gofmt -w .'
+
+  fmt:check:
+    desc: 'Fail if the code is not formatted (prints the offending files)'
+    cmds:
+      - 'gofmt -l .'
+      - 'test -z "$(gofmt -l .)"'
+
+  tidy:
+    desc: 'Tidy go.mod and go.sum'
+    cmds:
+      - 'go mod tidy'
+
+  check:
+    desc: 'Verify formatting, lint, and tests (pre-commit gate)'
+    cmds:
+      - task: 'fmt:check'
+      - task: 'lint'
+      - task: 'test'
+
+  clean:
+    desc: 'Remove build artifacts'
+    cmds:
+      - 'rm -f {{.BINARY}}'
+      - 'rm -rf dist'

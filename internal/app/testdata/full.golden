@@ -1,0 +1,127 @@
+all projects  all time  3 session(s)
+
+Session  Started           Where      Title
+zoo001   2026-08-17 10:00  /proj      Zoo main
+zoo002   2026-08-17 10:00  /proj/sub  (untitled)
+zoo003↓  2026-08-17 10:00  /proj      Subtask
+
+
+ ⚑ ❬zoo001❭ Zoo main
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:01:00 • user
+  │
+  │ [chat | user=x]
+  │ hello world
+
+
+  │ 2026-08-17 10:02:00 • assistant • glm-5/default @plan
+  │
+  │ weighing the options
+  │ across two lines
+  │
+  │ I will run tools.
+  │
+  │ bash echo hi                                                                         ok     1.2s
+  │   in
+  │     {
+  │       "command": "echo hi"
+  │     }
+  │   out hi
+  │ webfetch http://x                                                                   ERR     0.4s
+  │   in
+  │     {
+  │       "url": "http://x"
+  │     }
+  │   err boom: connection refused
+  │ bash sleep 999                                                                           running
+  │   in
+  │     {
+  │       "command": "sleep 999"
+  │     }
+  │ guess q                                                                             pending 2.0s
+  │   in
+  │     {
+  │       "query": "q"
+  │     }
+  │ bash ps aux [output truncated]                                                       ok     0.1s
+  │   in
+  │     {
+  │       "command": "ps aux"
+  │     }
+  │   out
+  │     USER PID
+  │     root 1
+  │   truncated 16 chars shown, full output at /nonexistent/tool-output/tool_x
+  │ glob * [output truncated]                                                            ok     0.1s
+  │   in
+  │     {
+  │       "pattern": "*"
+  │     }
+  │   out
+  │     a
+  │     b
+  │   truncated 4 chars shown, the rest was not kept
+  │
+  │ tokens 10 in 5 out 1 cached 2 written $0.0123 tool-calls
+
+
+  │ 2026-08-17 10:03:00 • user
+  │
+  │ attachment shot.png (image/png)
+  │
+  │ see attached
+
+
+  │ 2026-08-17 10:04:00 • assistant • glm-5 ERROR
+  │
+  │ partial answer
+  │
+  │   error {"name":"MessageAbortedError","data":{"message":"Aborted"}}
+
+
+  │ 2026-08-17 10:06:00 • user
+  │
+  │ [synthetic] continue where you left off
+
+
+  │ 2026-08-17 10:07:00 • assistant • glm-5
+  │
+  │ patch 2 file(s) deadbeef
+  │
+  │ context compacted
+
+
+ ⚑ ❬zoo003↓❭ Subtask
+┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈
+
+  │ 2026-08-17 10:08:00 • user
+  │
+  │ do the subtask
+
+
+ ↻ ❬zoo001❭ Zoo main
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-17 10:09:00 • user
+  │
+  │ and back to the main session
+
+
+ ⚑ ❬zoo002❭ (untitled)
+────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  │ 2026-08-18 09:30:00 • user
+  │
+  │ 日本語のコマンド 🎌 とても長い行
+
+
+  │ 2026-08-18 09:31:00 • assistant • glm-5
+  │
+  │ bash echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く          ok     0.5s
+  │   in
+  │     {
+  │       "command": "echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く"
+  │     }
+  │   out ok
+

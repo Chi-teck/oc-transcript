@@ -1,0 +1,5 @@
+# The golden files under internal/app/testdata/ are compared byte for byte with
+# what the renderer writes, and it writes \n on every platform. Windows git
+# checks out CRLF by default, which would fail those tests on the windows runner
+# for a difference that is not in the repository, so pin the working tree to LF.
+* text=auto eol=lf
