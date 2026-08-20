@@ -189,8 +189,10 @@ func TestRunEmptyMessages(t *testing.T) {
 
 	d.session("ses_a", "", "t", "/somewhere/else", 1)
 	d.userText("msg_1", "ses_a", 1, "hi")
+	// The root is named the way it was resolved, which on windows is the POSIX
+	// literal with the working drive in front of it.
 	if got := out("--root", "/not/there"); !strings.Contains(got,
-		"no opencode session has ever run under /not/there — try --root, or --everywhere") {
+		"no opencode session has ever run under "+resolvePath("/not/there")+" — try --root, or --everywhere") {
 		t.Errorf("wrong root: %q", got)
 	}
 	if got := out("--everywhere", "--all", "--session", "nope"); !strings.Contains(got,

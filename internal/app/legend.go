@@ -55,8 +55,11 @@ func legend(used []*session, root string, width int, ruled bool, counts map[stri
 	rows := make([][]string, 0, len(ordered))
 	for _, s := range ordered {
 		// Without a root there is nothing to be relative to, and the absolute
-		// path is the point — it is what tells two projects apart.
-		where := filepath.Clean(s.directory)
+		// path is the point — it is what tells two projects apart. It is
+		// printed in the shape the store holds it in: cleaning it would rewrite
+		// the separators of a store written on another platform, and a
+		// directory is data here the way a message body is.
+		where := s.directory
 		if root != "" {
 			if rel, err := filepath.Rel(root, where); err == nil && !strings.HasPrefix(rel, "..") {
 				where = rel

@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -9,10 +10,21 @@ import (
 // The legend's `where` column is relative to --root when a session sits under
 // it, and stays absolute when it does not.
 func TestLegendWhereRelativeToRoot(t *testing.T) {
-	d := zooDB(t)
+	// --root is resolved before it reaches the query, so this fixture cannot
+	// borrow the zoo's POSIX directories: on windows the flag comes back with a
+	// drive letter in front of it and matches nothing. The directories are
+	// built from a temp dir instead, absolute in the shape of whatever platform
+	// is running the test.
+	root := resolvePath(t.TempDir())
+	sub := filepath.Join(root, "sub")
+	d := newTestDB(t)
+	d.session("ses_a", "", "At the root", root, 1)
+	d.session("ses_b", "", "Below it", sub, 2)
+	d.userText("msg_a", "ses_a", 1, "hello")
+	d.userText("msg_b", "ses_b", 2, "hello")
 	t.Setenv("COLUMNS", "")
 	var stdout, stderr bytes.Buffer
-	if err := run([]string{"--db", d.path, "--all", "--root", "/proj", "--list"}, &stdout, &stderr); err != nil {
+	if err := run([]string{"--db", d.path, "--all", "--root", root, "--list"}, &stdout, &stderr); err != nil {
 		t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
 	}
 	out := stdout.String()
@@ -30,7 +42,7 @@ func TestLegendWhereRelativeToRoot(t *testing.T) {
 			t.Errorf("where column is %q, want it relative to the root, in:\n%s", got, out)
 		}
 	}
-	if strings.Contains(out, "/proj/sub") {
+	if strings.Contains(out, sub) {
 		t.Errorf("path under the root stayed absolute:\n%s", out)
 	}
 }
