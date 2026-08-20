@@ -32,7 +32,14 @@ rather than an anecdote.
 ## Install
 
 Grab an archive for your platform from the
-[releases page](https://github.com/Chi-teck/oc-transcript/releases) or build from source:
+[releases page](https://github.com/Chi-teck/oc-transcript/releases), or install it with the
+Go toolchain:
+
+```bash
+go install github.com/Chi-teck/oc-transcript@latest
+```
+
+Or build from a checkout:
 
 ```bash
 CGO_ENABLED=0 go build -o oc-transcript .   # or: task build
