@@ -11,6 +11,24 @@ opencode's SQLite store and interleaves them into a single stream, each run of b
 opening under a banner naming the session it belongs to. A subagent's tag ends in `↓` and
 its banner rule is dashed rather than solid.
 
+## What it's for
+
+To audit a run after it happened: where the agent went wrong, and what to change so it
+does not go wrong the same way again. For a background run — a scheduled job, an agent
+driven from a chat bridge, a subagent that did most of the editing — nobody watched it
+happen, so the transcript is the only record there is.
+
+`--tools full` prints the arguments each call was made with, the output that came back,
+the error when it failed, and how long it took. That is where the tooling problems show
+up — a description bad enough that the arguments are always wrong, output truncated
+before the useful part, an error the agent can't act on and retries three times over, a
+skill invoked two steps too late. `--reasoning` adds what the model thought it was doing
+right before the wrong turn.
+
+And because every session under the project lands in one ordered stream, a mistake that
+repeats across a week of runs is one `oc-transcript --all | grep …` away — a pattern
+rather than an anecdote.
+
 ## Install
 
 Grab an archive for your platform from the
