@@ -123,6 +123,14 @@ const (
 	sessionColor = 183 // the banner's tag and rule
 	sessionTitle = 225 // the title beside the tag: the same violet, near white
 
+	// The directory out at the banner's right margin takes the tag's own
+	// violet, not the metadata grey: the banner is one object across the line,
+	// and a grey path hanging off its right end read as a stray note the
+	// banner happened to be carrying rather than as the far end of the same
+	// line. It goes on unbolded, so the tag is still the loudest thing there
+	// and the path is the quiet answer to it.
+	sessionWhere = sessionColor
+
 	// The session table's column heads are white and bold — the only place
 	// anything here is either. A head row is neither a label beside a value nor
 	// furniture: it is the row that says what every row beneath it means, read

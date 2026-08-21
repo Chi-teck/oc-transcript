@@ -8,8 +8,8 @@ chronological transcript, laid out for the terminal.
 An agent driven from more than one place at once — a chat bridge, a scheduled run,
 someone at the TUI — gets a separate opencode session for each. `oc-transcript` walks
 opencode's SQLite store and interleaves them into a single stream, each run of blocks
-opening under a banner naming the session it belongs to. A subagent's tag ends in `↓` and
-its banner rule is dashed rather than solid.
+opening under a banner naming the session it belongs to and the directory it ran in.
+A subagent's tag ends in `↓` and its banner rule is dashed rather than solid.
 
 ## What it's for
 
@@ -56,10 +56,13 @@ oc-transcript --follow             # keep printing new messages as they arrive
 
 Scope is the working directory, the way git scopes itself: the sessions whose
 working directory sits inside `--root` are the ones you get. `--everywhere` ignores
-the root and takes the whole database.
+the root and takes the whole database. The path at the right of a banner is the
+directory that session ran in, written out whole rather than relative to the root:
+a transcript is usually redirected to a file and read somewhere else, where a
+relative path names nothing.
 
 ```
- ⚑ ❬a1b2c3❭ Flaky follow test
+ ⚑ ❬a1b2c3❭ Flaky follow test                        ~/src/oc-transcript
 ────────────────────────────────────────────────────────────────────────
 
   │ 2026-08-17 10:01:00 • user

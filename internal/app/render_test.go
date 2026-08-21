@@ -325,6 +325,38 @@ func TestSessionBannerFlags(t *testing.T) {
 	}
 }
 
+// The path on a banner answers what the title leaves out, and it is the one
+// thing on the line that may be dropped: the title is what the banner is for.
+func TestSessionBannerWhere(t *testing.T) {
+	paint := Paint{}
+	s := &session{sessionRow: sessionRow{title: "Zoo", directory: "/proj/sub"}, tag: "aaaaaa"}
+	// Whole and absolute, out at the right margin, and the line still ends
+	// exactly at the width. The root is not subtracted from it the way the
+	// session table subtracts it: a transcript is read away from the terminal
+	// that produced it, where a relative path names nothing.
+	line := sessionBanner(s, newFlag, paint, 40)[0]
+	if !strings.HasSuffix(line, " /proj/sub") || cells(line) != 40 {
+		t.Errorf("banner = %q (%d cells), want a 40-cell line ending in the absolute path", line, cells(line))
+	}
+	// A session the store never gave a directory has nothing to say out there,
+	// and says it without trailing blanks.
+	blank := &session{sessionRow: sessionRow{title: "Zoo"}, tag: "aaaaaa"}
+	if line := sessionBanner(blank, newFlag, paint, 40)[0]; line != strings.TrimRight(line, " ") {
+		t.Errorf("banner = %q, want no trailing blanks where there is no directory", line)
+	}
+	// Too narrow to hold both: the title takes the room back rather than the
+	// path being drawn as an ellipsis and a letter.
+	narrow := &session{sessionRow: sessionRow{title: strings.Repeat("t", 100), directory: "/proj/deep/sub"}, tag: "aaaaaa"}
+	for _, line := range sessionBanner(narrow, newFlag, paint, 30) {
+		if cells(line) > 30 {
+			t.Errorf("banner line %q is %d cells", line, cells(line))
+		}
+	}
+	if line := sessionBanner(narrow, newFlag, paint, 30)[0]; strings.Contains(line, "…") && strings.Contains(line, "sub") {
+		t.Errorf("banner = %q, want the path dropped at this width", line)
+	}
+}
+
 func TestIndentBlockClamp(t *testing.T) {
 	paint := Paint{}
 	// A negative cap clamps to zero and reports what was actually dropped.

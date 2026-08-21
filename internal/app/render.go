@@ -589,7 +589,43 @@ func sessionBanner(s *session, flag string, paint Paint, width int) []string {
 	// flag hard against column zero reads as that rule's end-cap rather than as
 	// the first thing on the line. One cell for that inset, one for the gap
 	// after the tag.
-	title := truncateCells(titleOf(s), max(1, width-cells(tag)-2))
+	room := max(1, width-cells(tag)-2)
+	// The directory the session ran in, out at the right margin. A title says
+	// what the work was and the path says what it was done to, which is the
+	// half a title routinely leaves out — two sessions can carry the same
+	// generated title, and under --everywhere a transcript runs across
+	// projects, where the path is the only thing on the line telling them
+	// apart.
+	//
+	// Whole, and not cut down to --root the way the session table's column is.
+	// The table is read in the terminal that ran the command, with a summary
+	// line above it naming the root; a transcript is routinely redirected to a
+	// file and read somewhere else entirely, where `sub/` names nothing and
+	// `.` names less. The one shortening it keeps is ~ for home, which is
+	// unambiguous wherever the file is read.
+	//
+	// The title is served first and the path takes what is left: a path cut
+	// from the left still names the directory it ends in, while a title cut
+	// anywhere loses its subject. So the title keeps up to titleFloor cells —
+	// the same floor the session table holds for it — before the path gets
+	// any, and the pair are held two cells apart, which is padTo's own floor.
+	//
+	// What is left then has to be worth spending: a path squeezed to a couple
+	// of cells is an ellipsis and one letter, noise at the margin rather than
+	// an answer, so below whereFloor the path is dropped and the title takes
+	// the width back. Like the table's floors this one is not owed — a path
+	// short enough to fit whole is drawn whole, however little room there is.
+	title, where := titleOf(s), homeTilde(s.directory)
+	w := max(0, room-min(cells(title), titleFloor)-2)
+	if w < min(cells(where), whereFloor) {
+		w = 0
+	}
+	w = min(w, cells(where))
+	if w == 0 {
+		title, where = truncateCells(title, room), ""
+	} else {
+		title, where = truncateCells(title, room-w-2), tailCells(where, w)
+	}
 	// The rule under the tag is the envelope the rail used to draw: one line
 	// clear across the width, saying everything below it belongs to this
 	// session until the next rule. Unlike the rail it costs no column, and it
@@ -610,11 +646,15 @@ func sessionBanner(s *session, flag string, paint Paint, width int) []string {
 	// every banner: it says a line is a banner, and the tag beside it says
 	// which.
 	rule := paint.paint(strings.Repeat(glyph, max(1, width)), sessionColor)
+	body := paint.paint(title, sessionTitle)
+	if where != "" {
+		body = padTo(body, paint.paint(where, sessionWhere), room)
+	}
 	// Two lines and no blanks. The air a banner needs on both sides to read as
 	// one object is sessionGap above and bannerGap below, and both belong to
 	// whoever is laying banners down rather than to the banner.
 	return []string{
-		" " + paint.paint(tag, sessionColor, true) + " " + paint.paint(title, sessionTitle),
+		" " + paint.paint(tag, sessionColor, true) + " " + body,
 		rule,
 	}
 }
