@@ -51,7 +51,7 @@ CGO_ENABLED=0 go build -o oc-transcript .   # or: task build
 oc-transcript                      # last 24h of sessions run under the cwd
 oc-transcript --all --tools full   # everything, with full tool output
 oc-transcript --list               # just the sessions, no messages
-oc-transcript --follow             # keep printing new messages as they arrive
+oc-transcript --follow             # keep printing new turns as they complete
 ```
 
 Scope is the working directory, the way git scopes itself: the sessions whose

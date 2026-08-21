@@ -406,3 +406,20 @@ func TestOneLineAndSummary(t *testing.T) {
 		t.Errorf("nothing: %q", got)
 	}
 }
+
+// TestEmptyReasoningIsNotABody pins the guard the reasoning case shares with
+// text. opencode commits a reasoning part before the model has written a token
+// into it, so a part that exists but is still empty must not fabricate a block:
+// a header over a blank rail is what a live session printed before this.
+func TestEmptyReasoningIsNotABody(t *testing.T) {
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.message("msg_1", "ses_a", base, `{"role":"assistant","modelID":"m"}`)
+	d.part("prt_1", "msg_1", "ses_a", base+1, `{"type":"step-start"}`)
+	d.part("prt_2", "msg_1", "ses_a", base+2, `{"type":"reasoning","text":"  \n"}`)
+
+	if got := runArgs(t, d, "", "--reasoning"); strings.Contains(got, "assistant") {
+		t.Errorf("an empty reasoning part printed a turn:\n%s", got)
+	}
+}

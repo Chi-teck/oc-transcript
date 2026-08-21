@@ -17,6 +17,13 @@ type messageData struct {
 	Variant flexString      `json:"variant"`
 	Agent   flexString      `json:"agent"`
 	Error   json.RawMessage `json:"error"`
+	Time    *messageTime    `json:"time"`
+}
+
+// messageTime is the turn's own clock. Only `completed` is read: its presence
+// is what says a turn is over and will not grow any more parts.
+type messageTime struct {
+	Completed json.RawMessage `json:"completed"`
 }
 
 type partData struct {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +201,230 @@ func TestFollowExactlyOnce(t *testing.T) {
 	}
 	if rules := regexp.MustCompile(`(?m)^\d{4}-\d{2}-\d{2} ─`).FindAllString(out, -1); len(rules) > 1 {
 		t.Errorf("day rule reprinted %d times", len(rules))
+	}
+}
+
+// roundOpts parses the flags a build() test needs, with warnings collected
+// where a failure can print them.
+func roundOpts(t *testing.T, d *testDB, extra ...string) *options {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	opts, err := parseArgs(append([]string{"--db", d.path, "--everywhere", "--all"}, extra...),
+		&stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.stderr = &stderr
+	return opts
+}
+
+// liveTurn writes what opencode leaves behind mid-stream: the message row is
+// committed when the turn starts, with no completion stamp, and the parts are
+// written and rewritten while the model produces them. What exists at this
+// instant is a step-start and half a reasoning block.
+func liveTurn(d *testDB, mid, sid string, ts int64) {
+	d.t.Helper()
+	d.message(mid, sid, ts, `{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(ts)+`}}`)
+	d.part("prt_"+mid+"0", mid, sid, ts+1, `{"type":"step-start"}`)
+	d.part("prt_"+mid+"1", mid, sid, ts+2, `{"type":"reasoning","text":"weighing the"}`)
+}
+
+// finishTurn is the rest of that write sequence: the reasoning grows in place,
+// the answer lands, and the completion stamp goes in last.
+func finishTurn(d *testDB, mid string, ts int64) {
+	d.t.Helper()
+	exec := func(query string, args ...any) {
+		if _, err := d.db.Exec(query, args...); err != nil {
+			d.t.Fatal(err)
+		}
+	}
+	exec("update part set data = ? where id = ?",
+		`{"type":"reasoning","text":"weighing the options"}`, "prt_"+mid+"1")
+	d.part("prt_"+mid+"2", mid, "ses_a", ts+3, `{"type":"text","text":"the answer"}`)
+	exec("update message set data = ? where id = ?",
+		`{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(ts)+
+			`,"completed":`+fmt.Sprint(ts+4)+`}}`, mid)
+}
+
+// TestFollowHoldsUnsettledTurn is the regression this gate exists for: a poll
+// landing inside a turn used to render whatever parts had arrived and advance
+// the cursor past the message, so the parts written afterwards were never read
+// and the transcript kept half a turn forever. The turn must now appear once,
+// whole, in the round after it completes — and the two rounds together must be
+// what one pass over the finished fixture prints.
+func TestFollowHoldsUnsettledTurn(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.userText("msg_1", "ses_a", base, "hello")
+	liveTurn(d, "msg_live", "ses_a", base+1000)
+
+	ctx := context.Background()
+	st := d.open(t)
+	opts := roundOpts(t, d, "--follow", "--reasoning")
+
+	first, err := build(ctx, st, opts, messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.held == nil || first.held.messageID != "msg_live" {
+		t.Fatalf("held = %+v, want the in-flight assistant turn", first.held)
+	}
+	if first.last == nil || first.last.id != "msg_1" {
+		t.Fatalf("cursor = %+v, want it left on the user turn", first.last)
+	}
+	if got := strings.Join(first.lines, "\n"); strings.Contains(got, "weighing the") {
+		t.Errorf("the in-flight turn was emitted:\n%s", got)
+	}
+
+	finishTurn(d, "msg_live", base+1000)
+
+	second, err := build(ctx, st, opts, messageQuery{after: first.last}, first.seam)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.held != nil {
+		t.Errorf("held = %+v after the turn completed, want nil", second.held)
+	}
+	if second.last == nil || second.last.id != "msg_live" {
+		t.Fatalf("cursor = %+v, want it past the assistant turn", second.last)
+	}
+	if got := strings.Join(second.lines, "\n"); strings.Contains(got, "hello") {
+		t.Errorf("the user turn was repeated:\n%s", got)
+	}
+
+	// The contract: the tail is byte-for-byte a suffix of what the same range
+	// prints in one pass. Only the accumulated stream can say so — a round
+	// opens on ground that already ends in endGap and lays down the difference.
+	onePass, err := build(ctx, st, roundOpts(t, d, "--reasoning"), messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := slices.Concat(first.lines, second.lines)
+	if !slices.Equal(got, onePass.lines) {
+		t.Errorf("two rounds:\n%s\n\nnot one pass:\n%s",
+			strings.Join(got, "\n"), strings.Join(onePass.lines, "\n"))
+	}
+}
+
+// TestFollowStallBreaker pins the clause that keeps a dead turn from wedging
+// the tail: a server killed mid-stream leaves a message with neither a
+// completion stamp nor an error, and the moment anything else happens in that
+// session the turn is settled by having a successor.
+func TestFollowStallBreaker(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	liveTurn(d, "msg_live", "ses_a", base+1000)
+	d.userText("msg_next", "ses_a", base+2000, "still there?")
+
+	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--follow", "--reasoning"),
+		messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.held != nil {
+		t.Errorf("held = %+v, want nil: the dead turn has a successor", got.held)
+	}
+	if got.last == nil || got.last.id != "msg_next" {
+		t.Fatalf("cursor = %+v, want it past both turns", got.last)
+	}
+	out := strings.Join(got.lines, "\n")
+	for _, want := range []string{"weighing the", "still there?"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q not emitted:\n%s", want, out)
+		}
+	}
+}
+
+// TestFollowUnsettledHoldsLaterSessions pins stop-don't-skip. The cursor is one
+// global keyset position, so emitting session B's finished turn would mean
+// advancing past session A's live one and losing the rest of it. A live turn
+// holds every session in scope, not only its own.
+func TestFollowUnsettledHoldsLaterSessions(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.session("ses_b", "", "B", "/p", base)
+	liveTurn(d, "msg_live", "ses_a", base+1000)
+	d.userText("msg_b1", "ses_b", base+2000, "elsewhere")
+
+	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--follow", "--reasoning"),
+		messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.held == nil || got.held.messageID != "msg_live" {
+		t.Fatalf("held = %+v, want session A's in-flight turn", got.held)
+	}
+	if len(got.lines) != 0 {
+		t.Errorf("emitted past the held turn:\n%s", strings.Join(got.lines, "\n"))
+	}
+	if got.last != nil {
+		t.Errorf("cursor = %+v, want it left where it was", got.last)
+	}
+	// The reader is told which of the two reasons an empty round has.
+	if !strings.Contains(got.empty, "ses_a") || !strings.Contains(got.empty, "still being written") {
+		t.Errorf("empty = %q, want it to name the session being waited on", got.empty)
+	}
+}
+
+// TestFollowEmitsAbortedTurn covers the error clause: escape ends a turn with
+// no completion stamp, and what exists is what there will be, so the turn goes
+// out in the round it is seen rather than waiting for a successor.
+func TestFollowEmitsAbortedTurn(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.message("msg_ab", "ses_a", base+1000,
+		`{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(base+1000)+`},
+		  "error":{"name":"MessageAbortedError","data":{}}}`)
+	d.part("prt_ab", "msg_ab", "ses_a", base+1001, `{"type":"text","text":"half an answer"}`)
+
+	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--follow"),
+		messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.held != nil {
+		t.Errorf("held = %+v, want nil: an aborted turn is over", got.held)
+	}
+	if got.last == nil || got.last.id != "msg_ab" {
+		t.Fatalf("cursor = %+v, want it past the aborted turn", got.last)
+	}
+	if out := strings.Join(got.lines, "\n"); !strings.Contains(out, "half an answer") {
+		t.Errorf("the aborted turn was not emitted:\n%s", out)
+	}
+}
+
+// TestUnsettledTurnPrintsWithoutFollow pins the gate to the flag: a one-shot
+// run prints what is in the store at that moment, in-flight turns and all, and
+// has no cursor to burn. A refactor keying the gate on q.after would move the
+// golden files.
+func TestUnsettledTurnPrintsWithoutFollow(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.userText("msg_1", "ses_a", base, "hello")
+	liveTurn(d, "msg_live", "ses_a", base+1000)
+
+	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--reasoning"),
+		messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.held != nil {
+		t.Errorf("held = %+v without --follow, want nil", got.held)
+	}
+	if out := strings.Join(got.lines, "\n"); !strings.Contains(out, "weighing the") {
+		t.Errorf("the in-flight turn was withheld without --follow:\n%s", out)
+	}
+	if got.last == nil || got.last.id != "msg_live" {
+		t.Fatalf("cursor = %+v, want it past the in-flight turn", got.last)
 	}
 }

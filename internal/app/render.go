@@ -403,7 +403,7 @@ func renderMessage(msg messageRow, parts []partRow, opts *options) []string {
 			c.tool = true
 			body = append(body, c)
 
-		case p.Type == "reasoning" && opts.reasoning:
+		case p.Type == "reasoning" && opts.reasoning && strings.TrimSpace(string(p.Text)) != "":
 			// No label: the colour is the label. Reasoning is the one part whose
 			// whole body is a single kind of thing, so a hue over all of it says
 			// what a word in front of the first line said, without competing with

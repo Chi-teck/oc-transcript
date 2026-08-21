@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"runtime"
@@ -20,6 +21,15 @@ type transcript struct {
 	last  *cursor // the last message emitted
 	seam  seam
 	empty string
+	held  *heldTurn
+}
+
+// heldTurn is the in-flight message a --follow round refused to print: the
+// round stopped there, so the cursor did not move past it and nothing after it
+// was emitted either.
+type heldTurn struct {
+	tag       string // the held session's short handle, for the notice
+	messageID string
 }
 
 // seam is the banner state one --follow round hands the next: which session
@@ -103,6 +113,13 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 	if err != nil {
 		return nil, err
 	}
+	if opts.follow {
+		if n := settledPrefix(messages); n < len(messages) {
+			stop := messages[n]
+			t.held = &heldTurn{tag: byID[stop.sessionID].tag, messageID: stop.id}
+			messages = messages[:n]
+		}
+	}
 	mids := make([]string, len(messages))
 	for i, m := range messages {
 		mids[i] = m.id
@@ -175,11 +192,70 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 		gap(endGap)
 	}
 	if len(t.lines) == 0 {
-		hint := " — try --all"
-		if opts.all {
-			hint = ""
+		if t.held != nil {
+			t.empty = fmt.Sprintf("nothing settled yet — the turn in %s is still being written", t.held.tag)
+		} else {
+			hint := " — try --all"
+			if opts.all {
+				hint = ""
+			}
+			t.empty = fmt.Sprintf("nothing from %d session(s) in this window%s", len(wanted), hint)
 		}
-		t.empty = fmt.Sprintf("nothing from %d session(s) in this window%s", len(wanted), hint)
 	}
 	return t, nil
+}
+
+// settledPrefix is how much of a --follow round may be emitted: everything up
+// to the first message still being written. A message row is written when a
+// turn starts and its parts stream in afterwards, so rendering one mid-flight
+// prints half a turn — and the cursor then advances past it, so the rest is
+// never read again. A turn therefore appears whole or not at all.
+//
+// A message is settled when it cannot grow any more parts:
+//
+//	a newer message exists in the same session // a next turn implies this one is done
+//	role != "assistant"                        // a prompt is written whole
+//	data.error is set                          // aborted or failed
+//	data.time.completed is set                 // finished normally
+//
+// The round stops at the first unsettled message rather than skipping it: the
+// cursor is one global keyset position, so emitting a later message means
+// advancing past the held one, which is the bug this exists to prevent. A live
+// turn therefore holds every session in scope, not only its own.
+//
+// The tail of a session *in this batch* is the tail of the session, because
+// --follow refuses --until (cli.go:201) and so never reads a bounded window.
+// Relax that and "nothing after it here" stops meaning "nothing after it", and
+// finished turns are held forever.
+func settledPrefix(messages []messageRow) int {
+	tail := make(map[string]int, len(messages))
+	for i, m := range messages {
+		tail[m.sessionID] = i
+	}
+	for i, m := range messages {
+		// Only a message with nothing after it in its session can still be
+		// growing, so the decode inside settled runs at most once per session
+		// — and on the opening transcript of a --follow run, that batch is
+		// every message in the project.
+		if i == tail[m.sessionID] && !settled(m) {
+			return i
+		}
+	}
+	return len(messages)
+}
+
+func settled(msg messageRow) bool {
+	var data messageData
+	if err := json.Unmarshal(msg.data, &data); err != nil {
+		return true // renderMessage warns about it; the gate does not double up
+	}
+	switch {
+	case string(data.Role) != "assistant":
+		return true
+	case truthy(data.Error):
+		return true
+	case data.Time != nil && truthy(data.Time.Completed):
+		return true
+	}
+	return false
 }

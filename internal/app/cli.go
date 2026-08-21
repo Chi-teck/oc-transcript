@@ -156,7 +156,7 @@ func parseArgs(args []string, stdout, stderr io.Writer) (*options, error) {
 	fs.IntVar(&opts.argWidth, "arg-width", 100, "cap on a one-line tool summary")
 	fs.Var(color, "color", "colour sessions in the terminal (auto: on for a tty, off for a pipe or --out)")
 	fs.BoolVar(&opts.list, "list", false, "list matching sessions instead of the transcript, with the span, message count and token total of each")
-	fs.BoolVarP(&opts.follow, "follow", "f", false, "keep printing new messages as they arrive")
+	fs.BoolVarP(&opts.follow, "follow", "f", false, "keep printing new turns as they complete")
 	fs.Float64Var(&opts.interval, "interval", 2.0, "--follow poll interval in seconds")
 	fs.StringVarP(&opts.out, "out", "o", "", "write to a file instead of stdout")
 	fs.BoolVar(&showVersion, "version", false, "print the version and exit")
@@ -265,7 +265,7 @@ func usage(width int) string {
 			{"-o, --out FILE", "write to a file instead of stdout"},
 		}},
 		{"Following", []flagHelp{
-			{"-f, --follow", "keep printing new messages as they arrive"},
+			{"-f, --follow", "keep printing new turns as they complete"},
 			{"--interval SECONDS", "--follow poll interval (default: 2)"},
 		}},
 		{"", []flagHelp{
