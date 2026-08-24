@@ -98,12 +98,12 @@ func syntheticTask(text string) (id, state, summary, result string, ok bool) {
 	if !strings.HasPrefix(text, taskOpen) {
 		return "", "", "", "", false
 	}
-	end := strings.Index(text, ">")
-	if end < 0 {
+	open, _, closed := strings.Cut(text, ">")
+	if !closed {
 		return "", "", "", "", false
 	}
-	id, okID := xmlAttr(text[:end], "id")
-	state, okState := xmlAttr(text[:end], "state")
+	id, okID := xmlAttr(open, "id")
+	state, okState := xmlAttr(open, "state")
 	summary, okSummary := xmlElement(text, "summary")
 	if !okID || !okState || !okSummary {
 		return "", "", "", "", false
@@ -121,30 +121,25 @@ func syntheticTask(text string) (id, state, summary, result string, ok bool) {
 
 // xmlAttr reads a double-quoted attribute out of an opening tag.
 func xmlAttr(tag, name string) (string, bool) {
-	at := strings.Index(tag, " "+name+`="`)
-	if at < 0 {
+	_, rest, ok := strings.Cut(tag, " "+name+`="`)
+	if !ok {
 		return "", false
 	}
-	rest := tag[at+len(name)+3:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return "", false
-	}
-	return rest[:end], true
+	value, _, ok := strings.Cut(rest, `"`)
+	return value, ok
 }
 
 // xmlElement is the text between a tag and its closing twin.
 func xmlElement(body, name string) (string, bool) {
-	at := strings.Index(body, "<"+name+">")
-	if at < 0 {
+	_, rest, ok := strings.Cut(body, "<"+name+">")
+	if !ok {
 		return "", false
 	}
-	rest := body[at+len(name)+2:]
-	end := strings.Index(rest, "</"+name+">")
-	if end < 0 {
+	text, _, ok := strings.Cut(rest, "</"+name+">")
+	if !ok {
 		return "", false
 	}
-	return strings.TrimSpace(rest[:end]), true
+	return strings.TrimSpace(text), true
 }
 
 // renderSynthetic is what follows the [synthetic] label: the task envelope
