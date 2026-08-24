@@ -80,6 +80,9 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   │ 2026-08-17 10:06:00 • user
   │
   │ [synthetic] continue where you …
+  │
+  │ [synthetic] task ❬zoo003❭ completed: …
+  │   result 15 seconds have passed.
 
 
   │ 2026-08-17 10:07:00 • assistant • glm-5

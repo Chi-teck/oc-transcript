@@ -68,6 +68,125 @@ func toolSummary(state *toolState, limit int) string {
 	return ""
 }
 
+// The envelope opencode injects as a synthetic text part when a background
+// subagent finishes: an opening tag carrying that subagent's session id and the
+// state it ended in, a one-line summary, and whatever it returned.
+//
+//	<task id="ses_…" state="completed">
+//	<summary>Background task completed: …</summary>
+//	<task_result>
+//	…
+//	</task_result>
+//	</task>
+//
+// It is the one synthetic shape that is a record rather than prose. The others
+// — the nudge after a compaction, the note that the user ran a tool — collapse
+// to a line cleanly; this one spends most of the width on markup and on a
+// session id the banner overhead already prints, and loses the summary
+// mid-word.
+const taskOpen = "<task "
+
+// syntheticTask reads that envelope: the id and state off the opening tag, the
+// summary, and the result if one is there.
+//
+// Scanned rather than parsed. The <task_result> body is whatever a subagent
+// returned and may hold a bare <, which would fail encoding/xml on a part that
+// renders perfectly well. Anything that does not match comes back ok=false and
+// is drawn the way every other synthetic part is — no error, no warning.
+func syntheticTask(text string) (id, state, summary, result string, ok bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, taskOpen) {
+		return "", "", "", "", false
+	}
+	end := strings.Index(text, ">")
+	if end < 0 {
+		return "", "", "", "", false
+	}
+	id, okID := xmlAttr(text[:end], "id")
+	state, okState := xmlAttr(text[:end], "state")
+	summary, okSummary := xmlElement(text, "summary")
+	if !okID || !okState || !okSummary {
+		return "", "", "", "", false
+	}
+	// The summary opens by naming the state the attribute has already given,
+	// and the line prints that state in front of it: left alone it reads
+	// "completed: Background task completed: …". A summary that does not carry
+	// the prefix is printed whole.
+	summary = strings.TrimPrefix(summary, "Background task "+state+": ")
+	// A task that failed may carry no result at all, which is not a reason to
+	// fall back to the markup.
+	result, _ = xmlElement(text, "task_result")
+	return id, state, summary, result, true
+}
+
+// xmlAttr reads a double-quoted attribute out of an opening tag.
+func xmlAttr(tag, name string) (string, bool) {
+	at := strings.Index(tag, " "+name+`="`)
+	if at < 0 {
+		return "", false
+	}
+	rest := tag[at+len(name)+3:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return "", false
+	}
+	return rest[:end], true
+}
+
+// xmlElement is the text between a tag and its closing twin.
+func xmlElement(body, name string) (string, bool) {
+	at := strings.Index(body, "<"+name+">")
+	if at < 0 {
+		return "", false
+	}
+	rest := body[at+len(name)+2:]
+	end := strings.Index(rest, "</"+name+">")
+	if end < 0 {
+		return "", false
+	}
+	return strings.TrimSpace(rest[:end]), true
+}
+
+// renderSynthetic is what follows the [synthetic] label: the task envelope
+// drawn as the record it is, and for every other shape the one-lined text they
+// have always been.
+//
+// The tag is the session banner's own — same six characters, same brackets,
+// same hue — so the line can be matched by eye against the banner of the
+// session it names. No ↓ hangs off it: that suffix is tagSessions' answer to
+// whether the parent session is in scope, and all this line has is an id. A tag
+// that is right six characters out of six is worth more than one that guesses
+// an arrow.
+//
+// The state comes off the attribute rather than out of the summary's wording,
+// since the attribute is the authoritative one, and the summary itself stays in
+// the tier prose takes: it is the only part of the line the subagent wrote.
+func renderSynthetic(text string, opts *options) string {
+	id, state, summary, result, ok := syntheticTask(text)
+	if !ok {
+		return oneLineText(text, opts.argWidth)
+	}
+	paint := opts.paint
+	tag := tagOpen + tagFor(id) + tagClose
+	head := paint.paint("task", grey) + " " + paint.paint(tag, sessionColor) +
+		" " + paint.paint(state+":", argColor)
+	// The line answers to --arg-width the way the one-lined form it replaces
+	// did, and the header is charged to that budget before the summary: at
+	// --arg-width 20 the header alone overruns it and the summary comes back an
+	// ellipsis, which is what a cap that bites looks like.
+	if s := oneLineText(summary, opts.argWidth-cells("task "+tag+" "+state+": ")); s != "" {
+		head += " " + s
+	}
+	// The result is dropped unless --tools full asked for that much. The
+	// subagent's own session prints it verbatim under its own banner a few
+	// lines above — but only while that session is in scope, and under
+	// --session filtering this envelope is the one place it survives.
+	if result != "" && opts.tools == "full" {
+		return head + "\n" + indentBlock("result", result, opts.maxChars, paint, grey)
+	}
+	return head
+}
+
 // capRunes caps text at limit code points, saying how much was dropped. The
 // cap is on bulk, not width — the terminal width is the wrapper's business.
 func capRunes(body string, limit int) string {
@@ -393,7 +512,7 @@ func renderMessage(msg messageRow, parts []partRow, opts *options) []string {
 		case p.Type == "text":
 			text := string(p.Text)
 			if truthy(p.Synthetic) {
-				add(paint.paint("[synthetic]", dim) + " " + oneLineText(text, opts.argWidth))
+				add(paint.paint("[synthetic]", dim) + " " + renderSynthetic(text, opts))
 			} else if strings.TrimSpace(text) != "" {
 				add(strings.TrimRightFunc(text, unicode.IsSpace))
 			}

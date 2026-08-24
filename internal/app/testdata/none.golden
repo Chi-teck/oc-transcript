@@ -37,6 +37,8 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   │ 2026-08-17 10:06:00 • user
   │
   │ [synthetic] continue where you left off
+  │
+  │ [synthetic] task ❬zoo003❭ completed: Sleep 15 seconds in background
 
 
   │ 2026-08-17 10:07:00 • assistant • glm-5

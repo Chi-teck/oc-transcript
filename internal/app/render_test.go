@@ -89,6 +89,20 @@ func zooDB(t *testing.T) *testDB {
 	d.message("msg_z06", "ses_zoo001", m6, `{"role":"user"}`)
 	d.part("prt_z06", "msg_z06", "ses_zoo001", m6,
 		`{"type":"text","text":"continue where you left off","synthetic":true}`)
+	// The envelope opencode injects when a background subagent finishes, right
+	// after the synthetic prose above it: one golden shows both, so the record
+	// being read as a record and the prose still being one-lined are the same
+	// diff. It names ses_zoo003, whose banner is in this transcript, so the tag
+	// on the line can be checked against the tag on the banner.
+	d.part("prt_z06b", "msg_z06", "ses_zoo001", m6+1,
+		`{"type":"text","synthetic":true,"text":`+jsonStr(strings.Join([]string{
+			`<task id="ses_zoo003" state="completed">`,
+			`<summary>Background task completed: Sleep 15 seconds in background</summary>`,
+			`<task_result>`,
+			`15 seconds have passed.`,
+			`</task_result>`,
+			`</task>`,
+		}, "\n"))+`}`)
 
 	m7 := next()
 	d.message("msg_z07", "ses_zoo001", m7, `{"role":"assistant","modelID":"glm-5"}`)
@@ -404,6 +418,89 @@ func TestOneLineAndSummary(t *testing.T) {
 	state = &toolState{}
 	if got := toolSummary(state, 100); got != "" {
 		t.Errorf("nothing: %q", got)
+	}
+}
+
+// TestSyntheticTask pins what is read out of the <task> envelope and what is
+// refused: everything refused falls back to the one-lining every other
+// synthetic part gets, so a shape this does not know still renders.
+func TestSyntheticTask(t *testing.T) {
+	env := func(lines ...string) string { return strings.Join(lines, "\n") }
+	for _, c := range []struct {
+		name                       string
+		text                       string
+		id, state, summary, result string
+		ok                         bool
+	}{
+		{
+			name: "the envelope opencode writes",
+			text: env(
+				`<task id="ses_fcd374ef6ffefHxrQ5xmwEgKGZ" state="completed">`,
+				`<summary>Background task completed: Sleep 15 seconds in background</summary>`,
+				`<task_result>`,
+				`15 seconds have passed.`,
+				`</task_result>`,
+				`</task>`),
+			id: "ses_fcd374ef6ffefHxrQ5xmwEgKGZ", state: "completed",
+			summary: "Sleep 15 seconds in background", result: "15 seconds have passed.", ok: true,
+		},
+		{
+			// The state is read off the attribute, and the prefix stripped off
+			// the summary is the one that names that state — not a fixed
+			// "Background task completed: ".
+			name: "a task that failed, and no result with it",
+			text: env(
+				`<task id="ses_abc123" state="failed">`,
+				`<summary>Background task failed: Sleep 15 seconds in background</summary>`,
+				`</task>`),
+			id: "ses_abc123", state: "failed", summary: "Sleep 15 seconds in background", ok: true,
+		},
+		{
+			name: "a summary that does not carry the prefix is printed whole",
+			text: env(
+				`<task id="ses_abc123" state="completed">`,
+				`<summary>Sleep 15 seconds in background</summary>`,
+				`</task>`),
+			id: "ses_abc123", state: "completed", summary: "Sleep 15 seconds in background", ok: true,
+		},
+		{
+			// What the scanning buys over encoding/xml: agent output is not
+			// escaped, and a result that would fail a parser is still a result.
+			name: "a result holding a bare <",
+			text: env(
+				`<task id="ses_abc123" state="completed">`,
+				`<summary>Background task completed: compare them</summary>`,
+				`<task_result>`,
+				`a < b, and & is fine too`,
+				`</task_result>`,
+				`</task>`),
+			id: "ses_abc123", state: "completed", summary: "compare them",
+			result: "a < b, and & is fine too", ok: true,
+		},
+		{
+			name: "no summary: nothing to draw the line from",
+			text: env(
+				`<task id="ses_abc123" state="completed">`,
+				`<task_result>`,
+				`15 seconds have passed.`,
+				`</task_result>`,
+				`</task>`),
+		},
+		{
+			name: "the synthetic shapes that are prose",
+			text: "continue where you left off",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			id, state, summary, result, ok := syntheticTask(c.text)
+			if ok != c.ok {
+				t.Fatalf("ok = %v, want %v", ok, c.ok)
+			}
+			if id != c.id || state != c.state || summary != c.summary || result != c.result {
+				t.Errorf("= (%q, %q, %q, %q), want (%q, %q, %q, %q)",
+					id, state, summary, result, c.id, c.state, c.summary, c.result)
+			}
+		})
 	}
 }
 
