@@ -52,7 +52,7 @@ func zooDB(t *testing.T) *testDB {
 
 	m2 := next()
 	add("msg_z02", "ses_zoo001", "assistant", m2, `{"agent":"plan",
-	  "model":{"id":"glm-5","providerID":"p","variant":"default"},
+	  "model":{"id":"glm-5","providerID":"p","variant":"max"},
 	  "tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1,"write":2}},
 	  "cost":0.0123,"finish":"tool-calls","snapshot":"cafe",
 	  "time":{"created":`+fmt.Sprint(m2)+`,"completed":`+fmt.Sprint(m2+5000)+`},
@@ -560,5 +560,20 @@ func TestEmptySyntheticIsNotABody(t *testing.T) {
 
 	if got := runArgs(t, d, ""); strings.Contains(got, "synthetic") {
 		t.Errorf("an empty synthetic row printed a turn:\n%s", got)
+	}
+}
+
+// The migration wrote variant "default" onto every turn that had none, so it
+// is dropped like the default agent; any other variant is named.
+func TestHeadSuffixVariant(t *testing.T) {
+	for _, c := range []struct{ variant, want string }{
+		{"", "glm-5"},
+		{"default", "glm-5"},
+		{"max", "glm-5/max"},
+	} {
+		data := &messageData{Model: &modelRef{ID: "glm-5", Variant: flexString(c.variant)}}
+		if got := strings.Join(headSuffix("assistant", data), " "); got != c.want {
+			t.Errorf("variant %q: head suffix %q, want %q", c.variant, got, c.want)
+		}
 	}
 }

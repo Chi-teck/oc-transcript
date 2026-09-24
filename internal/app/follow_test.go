@@ -460,13 +460,51 @@ func TestSettledByType(t *testing.T) {
 		{"user", `{"text":"hi"}`, true},
 		{"synthetic", `{"text":"continue"}`, true},
 		{"compaction", `{"status":"completed","reason":"auto"}`, true},
+		{"compaction", `{"status":"running","reason":"manual"}`, false},
+		{"compaction", `{"reason":"auto"}`, true},
 		{"idle", `{"outcome":"succeeded"}`, true},
 		{"assistant", `{"time":{"created":1},"content":[]}`, false},
 		{"assistant", `{"time":{"created":1},"error":{"type":"aborted","message":"Aborted"}}`, true},
 		{"assistant", `{"time":{"created":1,"completed":2}}`, true},
+		{"assistant", `{"time":{"created":1,"completed":2},"finish":"tool-calls"}`, false},
+		{"assistant", `{"time":{"created":1,"completed":2},"finish":"stop"}`, true},
 	} {
 		if got := settled(messageRow{typ: c.typ, data: []byte(c.data)}); got != c.want {
 			t.Errorf("settled(%s %s) = %v, want %v", c.typ, c.data, got, c.want)
+		}
+	}
+}
+
+// TestSettledPrefixHoldsWholeAnswer pins that an answer is held as a whole:
+// the finished tool-call steps before a live step wait with it, from the
+// first of them — and a step boundary, where the last row is a finished
+// tool-call step with the next not yet written, holds the same way.
+func TestSettledPrefixHoldsWholeAnswer(t *testing.T) {
+	row := func(sid, typ, data string) messageRow {
+		return messageRow{sessionID: sid, typ: typ, data: []byte(data)}
+	}
+	user := `{"text":"go"}`
+	step := `{"time":{"created":1,"completed":2},"finish":"tool-calls"}`
+	live := `{"time":{"created":3}}`
+	done := `{"time":{"created":3,"completed":4},"finish":"stop"}`
+	for _, c := range []struct {
+		name string
+		rows []messageRow
+		want int
+	}{
+		{"between steps", []messageRow{row("a", "user", user), row("a", "assistant", step)}, 1},
+		{"in the second step", []messageRow{
+			row("a", "user", user), row("a", "assistant", step), row("a", "assistant", step),
+			row("a", "assistant", live)}, 1},
+		{"answer done", []messageRow{
+			row("a", "user", user), row("a", "assistant", step), row("a", "assistant", done)}, 3},
+		// Another session's rows in between do not end the walk back.
+		{"interleaved", []messageRow{
+			row("a", "user", user), row("a", "assistant", step), row("b", "user", user),
+			row("b", "assistant", done), row("a", "assistant", live)}, 1},
+	} {
+		if got := settledPrefix(c.rows); got != c.want {
+			t.Errorf("%s: settledPrefix = %d, want %d", c.name, got, c.want)
 		}
 	}
 }

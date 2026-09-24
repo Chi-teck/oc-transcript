@@ -23,6 +23,7 @@ type messageData struct {
 	Cost    json.RawMessage   `json:"cost"`
 	Finish  flexString        `json:"finish"`
 	Reason  flexString        `json:"reason"` // compaction
+	Status  flexString        `json:"status"` // compaction
 }
 
 type modelRef struct {

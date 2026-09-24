@@ -206,9 +206,15 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 // A message is settled when it cannot grow any more parts:
 //
 //	a newer message exists in the same session // a next turn implies this one is done
-//	type != "assistant"                        // a prompt, synthetic, compaction or idle row is written whole
+//	a compaction's status is "completed"       // the summary is in (no status: migrated)
+//	type != "assistant"                        // a prompt, synthetic or idle row is written whole
 //	data.error is set                          // aborted or failed
+//	data.finish is "tool-calls"                // unsettled: another step follows
 //	data.time.completed is set                 // finished normally
+//
+// An answer is one assistant row per step, so the steps before a live one are
+// held with it: a round stops at the first row of the answer, not at the step
+// still streaming, and the answer appears whole once its last step is done.
 //
 // The round stops at the first unsettled message rather than skipping it: the
 // cursor is one global keyset position, so emitting a later message means
@@ -224,16 +230,37 @@ func settledPrefix(messages []messageRow) int {
 	for i, m := range messages {
 		tail[m.sessionID] = i
 	}
+	cut := len(messages)
 	for i, m := range messages {
 		// Only a message with nothing after it in its session can still be
 		// growing, so the decode inside settled runs at most once per session
 		// — and on the opening transcript of a --follow run, that batch is
 		// every message in the project.
 		if i == tail[m.sessionID] && !settled(m) {
-			return i
+			cut = min(cut, answerStart(messages, i))
 		}
 	}
-	return len(messages)
+	return cut
+}
+
+// answerStart walks back from a live assistant row over the finished steps of
+// the same answer — the session's earlier rows that ended in tool calls — and
+// returns the index of the first.
+func answerStart(messages []messageRow, live int) int {
+	start := live
+	sid := messages[live].sessionID
+	for j := live - 1; j >= 0; j-- {
+		m := messages[j]
+		if m.sessionID != sid {
+			continue
+		}
+		var data messageData
+		if m.typ != "assistant" || json.Unmarshal(m.data, &data) != nil || data.Finish != "tool-calls" {
+			break
+		}
+		start = j
+	}
+	return start
 }
 
 func settled(msg messageRow) bool {
@@ -242,10 +269,17 @@ func settled(msg messageRow) bool {
 		return true // renderMessage warns about it; the gate does not double up
 	}
 	switch {
+	case msg.typ == "compaction":
+		// Written when the compaction starts and updated once the summary is
+		// in, tens of seconds later. One that fails is still settled by the
+		// idle row after it.
+		return data.Status == "" || data.Status == "completed"
 	case msg.typ != "assistant":
 		return true
 	case truthy(data.Error):
 		return true
+	case data.Finish == "tool-calls":
+		return false
 	case data.Time != nil && truthy(data.Time.Completed):
 		return true
 	}

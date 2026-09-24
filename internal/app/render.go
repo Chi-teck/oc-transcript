@@ -567,13 +567,15 @@ func renderMessage(msg messageRow, opts *options) []string {
 // headSuffix is what a head says after the role: which model answered, under
 // which agent, and whether the turn ended in an error. A prompt has none of it,
 // and the default agent is not worth naming — it is what @ is measured against.
+// Nor is the default variant: the v2 migration wrote it onto every turn that
+// had none, so naming it would only mark which turns are older.
 func headSuffix(typ string, data *messageData) []string {
 	if typ != "assistant" {
 		return nil
 	}
 	var suffix []string
 	if m := data.Model; m != nil && m.ID != "" {
-		if m.Variant != "" {
+		if m.Variant != "" && m.Variant != "default" {
 			suffix = append(suffix, string(m.ID)+"/"+string(m.Variant))
 		} else {
 			suffix = append(suffix, string(m.ID))
