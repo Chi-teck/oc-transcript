@@ -22,30 +22,36 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
 
   │ 2026-08-17 10:03:00 • user
   │
-  │ attachment shot.png (image/png)
-  │
   │ see attached
+  │
+  │ attachment shot.png (image/png)
 
 
   │ 2026-08-17 10:04:00 • assistant • glm-5 ERROR
   │
   │ partial answer
   │
+  │   error aborted: Aborted
+
+
+  │ 2026-08-17 10:04:30 • assistant • glm-5 ERROR
+  │
   │   error {"name":"MessageAbortedError","data":{"message":"Aborted"}}
 
 
-  │ 2026-08-17 10:06:00 • user
+  │ 2026-08-17 10:06:00 • synthetic
   │
-  │ [synthetic] continue where you left off
-  │
-  │ [synthetic] task ❬zoo003❭ completed: Sleep 15 seconds in background
+  │ continue where you left off
 
 
-  │ 2026-08-17 10:07:00 • assistant • glm-5
+  │ 2026-08-17 10:06:00 • synthetic
   │
-  │ patch 2 file(s) deadbeef
+  │ task ❬zoo003❭ completed: Sleep 15 seconds in background
+
+
+  │ 2026-08-17 10:07:00 • compaction
   │
-  │ context compacted
+  │ context compacted (auto)
 
 
  ⚑ ❬zoo003↓❭ Subtask                                                                           /proj

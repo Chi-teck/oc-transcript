@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -46,7 +47,7 @@ func oneLineText(value string, limit int) string {
 }
 
 // toolSummary is the one-line gist of a tool call: the first known input key
-// that has a value, else the state's title, else the whole input.
+// that has a value, else the whole input.
 func toolSummary(state *toolState, limit int) string {
 	var args map[string]json.RawMessage
 	if truthy(state.Input) {
@@ -59,16 +60,13 @@ func toolSummary(state *toolState, limit int) string {
 			}
 		}
 	}
-	if state.Title != "" {
-		return oneLineText(string(state.Title), limit)
-	}
 	if truthy(state.Input) {
 		return oneLine(state.Input, limit)
 	}
 	return ""
 }
 
-// The envelope opencode injects as a synthetic text part when a background
+// The envelope opencode injects as a synthetic message when a background
 // subagent finishes: an opening tag carrying that subagent's session id and the
 // state it ended in, a one-line summary, and whatever it returned.
 //
@@ -90,9 +88,9 @@ const taskOpen = "<task "
 // summary, and the result if one is there.
 //
 // Scanned rather than parsed. The <task_result> body is whatever a subagent
-// returned and may hold a bare <, which would fail encoding/xml on a part that
-// renders perfectly well. Anything that does not match comes back ok=false and
-// is drawn the way every other synthetic part is — no error, no warning.
+// returned and may hold a bare <, which would fail encoding/xml on a message
+// that renders perfectly well. Anything that does not match comes back ok=false
+// and is drawn the way every other synthetic message is — no error, no warning.
 func syntheticTask(text string) (id, state, summary, result string, ok bool) {
 	text = strings.TrimSpace(text)
 	if !strings.HasPrefix(text, taskOpen) {
@@ -142,9 +140,9 @@ func xmlElement(body, name string) (string, bool) {
 	return strings.TrimSpace(text), true
 }
 
-// renderSynthetic is what follows the [synthetic] label: the task envelope
-// drawn as the record it is, and for every other shape the one-lined text they
-// have always been.
+// renderSynthetic is the body of a synthetic turn: the task envelope drawn as
+// the record it is, and for every other shape the one-lined text they have
+// always been.
 //
 // The tag is the session banner's own — same six characters, same brackets,
 // same hue — so the line can be matched by eye against the banner of the
@@ -237,13 +235,13 @@ func outcomeCell(mark, took string) (markCell, tookCell string) {
 }
 
 // toolDuration is how long a call took, to a tenth of a second, or "" when the
-// state does not say.
-func toolDuration(state *toolState) string {
-	if state.Time == nil || !truthy(state.Time.Start) || !truthy(state.Time.End) {
+// item does not say.
+func toolDuration(item *contentItem) string {
+	if item.Time == nil || !truthy(item.Time.Created) || !truthy(item.Time.Completed) {
 		return ""
 	}
-	start, okS := numberValue(state.Time.Start)
-	end, okE := numberValue(state.Time.End)
+	start, okS := numberValue(item.Time.Created)
+	end, okE := numberValue(item.Time.Completed)
 	if !okS || !okE {
 		return ""
 	}
@@ -252,8 +250,8 @@ func toolDuration(state *toolState) string {
 
 // renderTool is one tool call: a head line with the outcome at the right
 // margin, then, with --tools full, the input and the output or error.
-func renderTool(p *partData, opts *options) []string {
-	state := p.State
+func renderTool(item *contentItem, opts *options) []string {
+	state := item.State
 	if state == nil {
 		state = &toolState{}
 	}
@@ -268,11 +266,11 @@ func renderTool(p *partData, opts *options) []string {
 	case "error":
 		mark = "ERR"
 	}
-	markCell, tookCell := outcomeCell(mark, toolDuration(state))
+	markCell, tookCell := outcomeCell(mark, toolDuration(item))
 	right := markCell + tookCell
 
 	paint := opts.paint
-	name := string(p.Tool)
+	name := string(item.Name)
 	if name == "" {
 		name = "?"
 	}
@@ -311,8 +309,28 @@ func renderTool(p *partData, opts *options) []string {
 	if status == "error" {
 		markColor = errColor
 	}
-	outcome := paint.paint(markCell, markColor, status == "error") + paint.paint(tookCell, dim)
+	// A call with no duration leaves the cell blank, and blanks are not painted:
+	// wrapped in a span they would survive the trim at the end of the line, and
+	// the coloured run would carry trailing cells the plain one does not.
+	if strings.TrimSpace(tookCell) != "" {
+		tookCell = paint.paint(tookCell, dim)
+	}
+	outcome := paint.paint(markCell, markColor, status == "error") + tookCell
 	lines := []string{padTo(head, outcome, opts.width-bodyIndent)}
+
+	// The output is the text items as they came, and a line naming each file
+	// item by its type. A file's uri is the file itself, base64 and all, so it
+	// is never printed.
+	var outputs []string
+	for _, o := range state.Content {
+		switch o.Type {
+		case "text":
+			outputs = append(outputs, string(o.Text))
+		case "file":
+			outputs = append(outputs, "file ("+cmp.Or(string(o.Mime), "?")+")")
+		}
+	}
+	output := strings.Join(outputs, "\n")
 
 	switch {
 	case opts.tools == "full":
@@ -320,15 +338,15 @@ func renderTool(p *partData, opts *options) []string {
 			lines = append(lines, indentBlock("in", reformatJSON(state.Input, 2), opts.maxChars, paint, grey))
 		}
 		if status == "error" {
-			lines = append(lines, indentBlock("err", string(state.Error), opts.maxChars, paint, errColor))
-		} else if state.Output != "" {
-			lines = append(lines, indentBlock("out", string(state.Output), opts.maxChars, paint, grey))
+			lines = append(lines, indentBlock("err", errorText(state.Error), opts.maxChars, paint, errColor))
+		} else if output != "" {
+			lines = append(lines, indentBlock("out", output, opts.maxChars, paint, grey))
 		}
 		if truncated {
-			lines = append(lines, "  "+paint.paint("truncated", grey)+" "+paint.paint(truncatedNote(state), argColor))
+			lines = append(lines, "  "+paint.paint("truncated", grey)+" "+paint.paint(truncatedNote(state, output), argColor))
 		}
 	case status == "error":
-		lines = append(lines, indentBlock("err", string(state.Error), opts.maxChars, paint, errColor))
+		lines = append(lines, indentBlock("err", errorText(state.Error), opts.maxChars, paint, errColor))
 	}
 	return lines
 }
@@ -345,11 +363,11 @@ func outputTruncated(state *toolState) bool {
 
 // truncatedNote says how much was kept inline and where the rest is, when the
 // tool wrote it somewhere (bash and webfetch do; read/glob/grep cut their own
-// output and keep nothing).
-func truncatedNote(state *toolState) string {
+// output and keep nothing). output is what the call left inline.
+func truncatedNote(state *toolState, output string) string {
 	var md toolMetadata
 	_ = json.Unmarshal(state.Metadata, &md)
-	note := fmt.Sprintf("%d chars shown", len([]rune(string(state.Output))))
+	note := fmt.Sprintf("%d chars shown", utf8.RuneCountInString(output))
 	if md.OutputPath == "" {
 		return note + ", the rest was not kept"
 	}
@@ -393,7 +411,7 @@ func turnColor(role string) int {
 	return grey
 }
 
-// A chunk is one part's lines; tool chunks pack together, everything else gets
+// A chunk is one content item's lines; tool chunks pack together, everything else gets
 // a blank line around it. A chunk colour is applied line by line, after the
 // lines are split and before they are wrapped, so a span never has to survive
 // being cut in two.
@@ -409,49 +427,16 @@ type chunk struct {
 
 func newChunk(text string) chunk { return chunk{text: text, color: noColor} }
 
-// decodeParts decodes a message's parts, warning about and dropping any that
-// will not parse rather than losing the whole message to one bad row.
-func decodeParts(parts []partRow, opts *options) []*partData {
-	payloads := make([]*partData, 0, len(parts))
-	for _, part := range parts {
-		var p partData
-		if err := json.Unmarshal(part.data, &p); err != nil {
-			opts.warnf("skipping part %s: %v", part.id, err)
-			continue
-		}
-		payloads = append(payloads, &p)
-	}
-	return payloads
-}
-
 // renderAttachment names a file the turn carried. Only the name and type: the
-// url is routinely a data: URI carrying the whole file.
+// data is the whole file, base64.
 //
 // One space in front of the type, like everywhere else: the parentheses already
 // say it is an aside and the tier already says it is the quiet one, so a wider
 // gap was a third way of saying the same thing and the only one that cost a
 // hole in the line.
-func renderAttachment(p *partData, paint Paint) string {
-	return paint.paint("attachment", grey) + " " + paint.paint(stringOr(p.Filename, "?"), argColor) +
-		" " + paint.paint("("+stringOr(p.Mime, "?")+")", dim)
-}
-
-// renderPatch is how many files a turn changed and the hash it changed them to.
-//
-// The hash is a value, not a footnote: it is the one thing on the line that can
-// be taken somewhere else and used, so it takes the same light tier the file
-// count does rather than the quiet grey stamps and totals take. One space
-// between them, not the two a value and its trailing metadata get elsewhere:
-// they are two values now, one label covers both, and a wider gap made the line
-// read as a field with something else stranded to the right of it.
-func renderPatch(p *partData, paint Paint) string {
-	var files []json.RawMessage
-	_ = json.Unmarshal(p.Files, &files)
-	hash := []rune(string(p.Hash))
-	hash = hash[:min(8, len(hash))]
-	return paint.paint("patch", grey) + " " +
-		paint.paint(fmt.Sprintf("%d file(s)", len(files)), argColor) +
-		" " + paint.paint(string(hash), argColor)
+func renderAttachment(name, mime string, paint Paint) string {
+	return paint.paint("attachment", grey) + " " + paint.paint(cmp.Or(name, "?"), argColor) +
+		" " + paint.paint("("+cmp.Or(mime, "?")+")", dim)
 }
 
 // renderStats is the --stats line: what one step of a turn spent.
@@ -462,12 +447,12 @@ func renderPatch(p *partData, paint Paint) string {
 // was one dim grey before, which gave the only part of it worth reading the
 // same weight as the words labelling it, and left the line reading as a total
 // rather than as five of them.
-func renderStats(p *partData, paint Paint) string {
-	tokens := p.Tokens
+func renderStats(data *messageData, paint Paint) string {
+	tokens := data.Tokens
 	if tokens == nil {
 		tokens = &stepTokens{}
 	}
-	cost, _ := numberValue(p.Cost)
+	cost, _ := numberValue(data.Cost)
 	field := func(value, label string) string {
 		return paint.paint(value, argColor) + " " + paint.paint(label, grey)
 	}
@@ -480,7 +465,7 @@ func renderStats(p *partData, paint Paint) string {
 	// The finish reason is the one thing on the line nobody asked for, so it
 	// keeps the quiet tier — and the tier is what sets it apart now that the gap
 	// in front of it is one space like every other.
-	if reason := string(p.Reason); reason != "" {
+	if reason := string(data.Finish); reason != "" {
 		stats += " " + paint.paint(reason, dim)
 	}
 	return stats
@@ -489,60 +474,73 @@ func renderStats(p *partData, paint Paint) string {
 // renderMessage renders one message as a block of lines, or nothing when it
 // has nothing to show. The header names the turn, the rail beside it says how
 // far the turn runs, and blank lines do the separating within.
-func renderMessage(msg messageRow, parts []partRow, opts *options) []string {
+func renderMessage(msg messageRow, opts *options) []string {
 	var data messageData
 	if err := json.Unmarshal(msg.data, &data); err != nil {
 		opts.warnf("skipping message %s: %v", msg.id, err)
 		return nil
 	}
-	role := string(data.Role)
-	if role == "" {
-		role = "?"
-	}
+	role := msg.typ
 	paint := opts.paint
 	var body []chunk
 	add := func(text string) { body = append(body, newChunk(text)) }
-	for _, p := range decodeParts(parts, opts) {
-		switch {
-		case p.Type == "text":
-			text := string(p.Text)
-			if truthy(p.Synthetic) {
-				add(paint.paint("[synthetic]", dim) + " " + renderSynthetic(text, opts))
-			} else if strings.TrimSpace(text) != "" {
-				add(strings.TrimRightFunc(text, unicode.IsSpace))
-			}
-
-		case p.Type == "tool" && opts.tools != "none":
-			c := newChunk(strings.Join(renderTool(p, opts), "\n"))
-			c.tool = true
-			body = append(body, c)
-
-		case p.Type == "reasoning" && opts.reasoning && strings.TrimSpace(string(p.Text)) != "":
-			// No label: the colour is the label. Reasoning is the one part whose
-			// whole body is a single kind of thing, so a hue over all of it says
-			// what a word in front of the first line said, without competing with
-			// the prose for the eye.
-			c := newChunk(capRunes(strings.TrimRightFunc(string(p.Text), unicode.IsSpace), opts.maxChars))
-			c.color = reasonColor
-			body = append(body, c)
-
-		case p.Type == "file":
-			add(renderAttachment(p, paint))
-
-		case p.Type == "patch":
-			add(renderPatch(p, paint))
-
-		case p.Type == "compaction":
-			add(paint.paint("context compacted", dim))
-
-		case p.Type == "step-finish" && opts.stats:
-			add(renderStats(p, paint))
+	switch role {
+	case "user":
+		if text := string(data.Text); strings.TrimSpace(text) != "" {
+			add(strings.TrimRightFunc(text, unicode.IsSpace))
 		}
-	}
+		for _, f := range data.Files {
+			add(renderAttachment(string(f.Name), string(f.Mime), paint))
+		}
 
-	if truthy(data.Error) {
-		add(indentBlock("error", reformatJSON(data.Error, -1), opts.maxChars, paint, errColor))
+	case "assistant":
+		for i, raw := range data.Content {
+			// Decoded one item at a time, so one that will not parse is warned
+			// about and dropped rather than losing the whole turn to it.
+			var item contentItem
+			if err := json.Unmarshal(raw, &item); err != nil {
+				opts.warnf("skipping content item %d of message %s: %v", i, msg.id, err)
+				continue
+			}
+			switch {
+			case item.Type == "text" && strings.TrimSpace(string(item.Text)) != "":
+				add(strings.TrimRightFunc(string(item.Text), unicode.IsSpace))
+
+			case item.Type == "tool" && opts.tools != "none":
+				c := newChunk(strings.Join(renderTool(&item, opts), "\n"))
+				c.tool = true
+				body = append(body, c)
+
+			case item.Type == "reasoning" && opts.reasoning && strings.TrimSpace(string(item.Text)) != "":
+				// No label: the colour is the label. Reasoning is the one item whose
+				// whole body is a single kind of thing, so a hue over all of it says
+				// what a word in front of the first line said, without competing with
+				// the prose for the eye.
+				c := newChunk(capRunes(strings.TrimRightFunc(string(item.Text), unicode.IsSpace), opts.maxChars))
+				c.color = reasonColor
+				body = append(body, c)
+			}
+		}
+		if truthy(data.Error) {
+			add(indentBlock("error", errorText(data.Error), opts.maxChars, paint, errColor))
+		}
+		// A step that never finished gets no line, even if its row carries
+		// tokens: v1 wrote a step-finish only for a step that finished, and
+		// the migrated rows keep that shape.
+		if opts.stats && data.Finish != "" {
+			add(renderStats(&data, paint))
+		}
+
+	case "synthetic":
+		// No label: the head already names the turn synthetic.
+		if text := string(data.Text); strings.TrimSpace(text) != "" {
+			add(renderSynthetic(text, opts))
+		}
+
+	case "compaction":
+		add(paint.paint("context compacted ("+cmp.Or(string(data.Reason), "?")+")", dim))
 	}
+	// idle, and any type this build does not know, leave the body empty.
 
 	if len(body) == 0 {
 		return nil
@@ -560,7 +558,7 @@ func renderMessage(msg messageRow, parts []partRow, opts *options) []string {
 	// says 10:27:51 is a piece that has to be traced back to whatever drew the last
 	// date. Every line answering for itself costs eleven cells and no thought.
 	head := stamp(msg.timeCreated) + headSep + role
-	if suffix := headSuffix(&data); len(suffix) > 0 {
+	if suffix := headSuffix(role, &data); len(suffix) > 0 {
 		head += headSep + strings.Join(suffix, " ")
 	}
 	return turnEnvelope(head, body, turnColor(role), opts)
@@ -569,16 +567,16 @@ func renderMessage(msg messageRow, parts []partRow, opts *options) []string {
 // headSuffix is what a head says after the role: which model answered, under
 // which agent, and whether the turn ended in an error. A prompt has none of it,
 // and the default agent is not worth naming — it is what @ is measured against.
-func headSuffix(data *messageData) []string {
-	if data.Role != "assistant" {
+func headSuffix(typ string, data *messageData) []string {
+	if typ != "assistant" {
 		return nil
 	}
 	var suffix []string
-	if data.ModelID != "" {
-		if data.Variant != "" {
-			suffix = append(suffix, string(data.ModelID)+"/"+string(data.Variant))
+	if m := data.Model; m != nil && m.ID != "" {
+		if m.Variant != "" {
+			suffix = append(suffix, string(m.ID)+"/"+string(m.Variant))
 		} else {
-			suffix = append(suffix, string(data.ModelID))
+			suffix = append(suffix, string(m.ID))
 		}
 	}
 	if data.Agent != "" && data.Agent != "build" {
@@ -614,7 +612,7 @@ func turnEnvelope(head string, body []chunk, color int, opts *options) []string 
 	// a tick of its own above the body's.
 	out = append(out, blank)
 	for i, c := range body {
-		// One blank line between parts keeps prose, blocks and labels apart; a
+		// One blank line between chunks keeps prose, blocks and labels apart; a
 		// run of tool calls stays packed so ok/ERR scan as a column.
 		if i > 0 && (!c.tool || !body[i-1].tool) {
 			out = append(out, blank)

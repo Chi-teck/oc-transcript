@@ -152,15 +152,10 @@ func TestFollowExactlyOnce(t *testing.T) {
 		for i := range rows {
 			ts := base + 1000 + int64(i/4) // four rows per millisecond
 			mid := fmt.Sprintf("msg_%03d", i)
+			// seq runs with the insert order, the way the store assigns it.
 			if _, err := d.db.Exec(
-				"insert into message (id, session_id, time_created, data) values (?,?,?,?)",
-				mid, "ses_a", ts, `{"role":"user"}`); err != nil {
-				writerDone <- err
-				return
-			}
-			if _, err := d.db.Exec(
-				"insert into part (id, message_id, session_id, time_created, data) values (?,?,?,?,?)",
-				"prt_"+mid, mid, "ses_a", ts, `{"type":"text","text":"row-`+fmt.Sprintf("%03d", i)+`"}`); err != nil {
+				"insert into session_message (id, session_id, type, seq, time_created, data) values (?,?,?,?,?,?)",
+				mid, "ses_a", "user", int64(100+i), ts, `{"text":"row-`+fmt.Sprintf("%03d", i)+`"}`); err != nil {
 				writerDone <- err
 				return
 			}
@@ -218,32 +213,28 @@ func roundOpts(t *testing.T, d *testDB, extra ...string) *options {
 	return opts
 }
 
-// liveTurn writes what opencode leaves behind mid-stream: the message row is
-// committed when the turn starts, with no completion stamp, and the parts are
-// written and rewritten while the model produces them. What exists at this
-// instant is a step-start and half a reasoning block.
+// liveTurn writes what opencode leaves behind mid-stream: the assistant row
+// is committed when the turn starts, with no completion stamp, and its content
+// is rewritten in place while the model produces it. What exists at this
+// instant is half a reasoning block.
 func liveTurn(d *testDB, mid, sid string, ts int64) {
 	d.t.Helper()
-	d.message(mid, sid, ts, `{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(ts)+`}}`)
-	d.part("prt_"+mid+"0", mid, sid, ts+1, `{"type":"step-start"}`)
-	d.part("prt_"+mid+"1", mid, sid, ts+2, `{"type":"reasoning","text":"weighing the"}`)
+	d.message(mid, sid, "assistant", d.nextSeq(sid), ts,
+		`{"model":{"id":"m"},"time":{"created":`+fmt.Sprint(ts)+`},
+		  "content":[{"type":"reasoning","text":"weighing the"}]}`)
 }
 
-// finishTurn is the rest of that write sequence: the reasoning grows in place,
-// the answer lands, and the completion stamp goes in last.
+// finishTurn is the rest of that write sequence: the reasoning grows, the
+// answer lands, and the completion stamp goes in with the last rewrite.
 func finishTurn(d *testDB, mid string, ts int64) {
 	d.t.Helper()
-	exec := func(query string, args ...any) {
-		if _, err := d.db.Exec(query, args...); err != nil {
-			d.t.Fatal(err)
-		}
+	if _, err := d.db.Exec("update session_message set data = ? where id = ?",
+		`{"model":{"id":"m"},"time":{"created":`+fmt.Sprint(ts)+`,"completed":`+fmt.Sprint(ts+4)+`},
+		  "finish":"stop",
+		  "content":[{"type":"reasoning","text":"weighing the options"},{"type":"text","text":"the answer"}]}`,
+		mid); err != nil {
+		d.t.Fatal(err)
 	}
-	exec("update part set data = ? where id = ?",
-		`{"type":"reasoning","text":"weighing the options"}`, "prt_"+mid+"1")
-	d.part("prt_"+mid+"2", mid, "ses_a", ts+3, `{"type":"text","text":"the answer"}`)
-	exec("update message set data = ? where id = ?",
-		`{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(ts)+
-			`,"completed":`+fmt.Sprint(ts+4)+`}}`, mid)
 }
 
 // TestFollowHoldsUnsettledTurn is the regression this gate exists for: a poll
@@ -380,10 +371,10 @@ func TestFollowEmitsAbortedTurn(t *testing.T) {
 	d := newTestDB(t)
 	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
 	d.session("ses_a", "", "A", "/p", base)
-	d.message("msg_ab", "ses_a", base+1000,
-		`{"role":"assistant","modelID":"m","time":{"created":`+fmt.Sprint(base+1000)+`},
-		  "error":{"name":"MessageAbortedError","data":{}}}`)
-	d.part("prt_ab", "msg_ab", "ses_a", base+1001, `{"type":"text","text":"half an answer"}`)
+	d.message("msg_ab", "ses_a", "assistant", 1, base+1000,
+		`{"model":{"id":"m"},"time":{"created":`+fmt.Sprint(base+1000)+`},
+		  "error":{"type":"aborted","message":"Aborted"},
+		  "content":[{"type":"text","text":"half an answer"}]}`)
 
 	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--follow"),
 		messageQuery{}, seam{})
@@ -426,5 +417,56 @@ func TestUnsettledTurnPrintsWithoutFollow(t *testing.T) {
 	}
 	if got.last == nil || got.last.id != "msg_live" {
 		t.Fatalf("cursor = %+v, want it past the in-flight turn", got.last)
+	}
+}
+
+// TestFollowIdleSettlesTurn pins that an idle row needs no case of its own in
+// the gate: it is a later message in the session, so the assistant turn before
+// it is settled even with no completion stamp — and the idle row itself is
+// written whole and renders nothing, so the cursor stays on the turn.
+func TestFollowIdleSettlesTurn(t *testing.T) {
+	t.Setenv("COLUMNS", "100")
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.userText("msg_1", "ses_a", base, "hello")
+	liveTurn(d, "msg_live", "ses_a", base+1000)
+	d.message("msg_idle", "ses_a", "idle", d.nextSeq("ses_a"), base+2000,
+		`{"time":{"created":`+fmt.Sprint(base+2000)+`},"outcome":"succeeded"}`)
+
+	got, err := build(context.Background(), d.open(t), roundOpts(t, d, "--follow", "--reasoning"),
+		messageQuery{}, seam{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.held != nil {
+		t.Errorf("held = %+v, want nil: an idle row follows the turn", got.held)
+	}
+	if got.last == nil || got.last.id != "msg_live" {
+		t.Fatalf("cursor = %+v, want it on the assistant turn", got.last)
+	}
+	if out := strings.Join(got.lines, "\n"); !strings.Contains(out, "weighing the") {
+		t.Errorf("the settled turn was not emitted:\n%s", out)
+	}
+}
+
+// TestSettledByType is the gate's table: only an assistant row can still be
+// growing, and only until it carries an error or a completion stamp.
+func TestSettledByType(t *testing.T) {
+	for _, c := range []struct {
+		typ, data string
+		want      bool
+	}{
+		{"user", `{"text":"hi"}`, true},
+		{"synthetic", `{"text":"continue"}`, true},
+		{"compaction", `{"status":"completed","reason":"auto"}`, true},
+		{"idle", `{"outcome":"succeeded"}`, true},
+		{"assistant", `{"time":{"created":1},"content":[]}`, false},
+		{"assistant", `{"time":{"created":1},"error":{"type":"aborted","message":"Aborted"}}`, true},
+		{"assistant", `{"time":{"created":1,"completed":2}}`, true},
+	} {
+		if got := settled(messageRow{typ: c.typ, data: []byte(c.data)}); got != c.want {
+			t.Errorf("settled(%s %s) = %v, want %v", c.typ, c.data, got, c.want)
+		}
 	}
 }

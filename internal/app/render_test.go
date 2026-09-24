@@ -14,8 +14,11 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden files")
 
-// zooDB builds a fixture covering every part type, all four tool statuses,
-// truncated output, an error turn, synthetic text, a huge data: URI, and a
+// zooDB builds a fixture covering every message type and content item, all
+// four tool statuses, truncated output, a tool that returned a file, a tool cut
+// off before it finished, error turns in and out of the {type, message} shape,
+// synthetic prose and a <task> envelope, a compaction, an attachment with a
+// huge base64 payload, an assistant turn with no content, an idle row, and a
 // CJK/emoji summary, spread over two days and three sessions (one a subagent).
 func zooDB(t *testing.T) *testDB {
 	t.Helper()
@@ -36,79 +39,106 @@ func zooDB(t *testing.T) *testDB {
 
 	ts := day1
 	next := func() int64 { ts += 60_000; return ts }
+	// Each row takes the next seq in its session, as the store assigns it.
+	add := func(id, sid, typ string, at int64, data string) {
+		t.Helper()
+		d.message(id, sid, typ, d.nextSeq(sid), at, data)
+	}
+	// A base64 image of ~200 KB, the size a pasted screenshot is. Neither the
+	// attachment nor the tool's file item may put any of it on the screen.
+	image := strings.Repeat("QUJD", 50_000)
 
 	d.userText("msg_z01", "ses_zoo001", next(), "[chat | user=x]\nhello world")
 
 	m2 := next()
-	d.message("msg_z02", "ses_zoo001", m2,
-		`{"role":"assistant","modelID":"glm-5","variant":"default","agent":"plan"}`)
-	for i, part := range []string{
-		`{"type":"step-start","snapshot":"cafe"}`,
-		`{"type":"reasoning","text":"weighing the options\nacross two lines"}`,
+	add("msg_z02", "ses_zoo001", "assistant", m2, `{"agent":"plan",
+	  "model":{"id":"glm-5","providerID":"p","variant":"default"},
+	  "tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":1,"write":2}},
+	  "cost":0.0123,"finish":"tool-calls","snapshot":"cafe",
+	  "time":{"created":`+fmt.Sprint(m2)+`,"completed":`+fmt.Sprint(m2+5000)+`},
+	  "content":[`+strings.Join([]string{
+		`{"type":"reasoning","text":"weighing the options\nacross two lines","time":{"created":1000}}`,
 		`{"type":"text","text":"I will run tools.\n\n"}`,
-		`{"type":"tool","tool":"bash","callID":"c1","state":{"status":"completed",
-		  "input":{"command":"echo hi"},"output":"hi\n","metadata":{"exit":0},
-		  "time":{"start":1000,"end":2200}}}`,
-		`{"type":"tool","tool":"webfetch","callID":"c2","state":{"status":"error",
-		  "input":{"url":"http://x"},"error":"boom: connection refused",
-		  "time":{"start":1000,"end":1400}}}`,
-		`{"type":"tool","tool":"bash","callID":"c3","state":{"status":"running",
-		  "input":{"command":"sleep 999"},"time":{"start":1000}}}`,
-		`{"type":"tool","tool":"guess","callID":"c4","state":{"status":"pending",
-		  "input":{"query":"q"},"time":{"start":1000,"end":3000}}}`,
-		`{"type":"tool","tool":"bash","callID":"c5","state":{"status":"completed",
-		  "input":{"command":"ps aux"},"output":"USER PID\nroot 1\n",
-		  "metadata":{"exit":0,"truncated":true,"outputPath":"/nonexistent/tool-output/tool_x"},
-		  "time":{"start":1000,"end":1100}}}`,
-		`{"type":"tool","tool":"glob","callID":"c6","state":{"status":"completed",
-		  "input":{"pattern":"*"},"output":"a\nb\n","metadata":{"count":100,"truncated":true},
-		  "time":{"start":1000,"end":1050}}}`,
-		`{"type":"step-finish","reason":"tool-calls","cost":0.0123,
-		  "tokens":{"input":10,"output":5,"cache":{"read":1,"write":2}}}`,
-	} {
-		d.part(fmt.Sprintf("prt_z02%02d", i), "msg_z02", "ses_zoo001", m2+int64(i), part)
-	}
+		`{"type":"tool","id":"c1","name":"bash","state":{"status":"completed",
+		  "input":{"command":"echo hi"},"content":[{"type":"text","text":"hi\n"}],
+		  "metadata":{"output":"hi\n","exit":0}},
+		  "time":{"created":1000,"completed":2200}}`,
+		`{"type":"tool","id":"c2","name":"webfetch","state":{"status":"error",
+		  "input":{"url":"http://x"},
+		  "error":{"type":"tool.execution","message":"boom: connection refused"}},
+		  "time":{"created":1000,"completed":1400}}`,
+		`{"type":"tool","id":"c3","name":"bash","state":{"status":"running",
+		  "input":{"command":"sleep 999"}},"time":{"created":1000}}`,
+		`{"type":"tool","id":"c4","name":"guess","state":{"status":"pending",
+		  "input":{"query":"q"}},"time":{"created":1000,"completed":3000}}`,
+		`{"type":"tool","id":"c5","name":"bash","state":{"status":"completed",
+		  "input":{"command":"ps aux"},"content":[{"type":"text","text":"USER PID\nroot 1\n"}],
+		  "metadata":{"exit":0,"truncated":true,"outputPath":"/nonexistent/tool-output/tool_x"}},
+		  "time":{"created":1000,"completed":1100}}`,
+		`{"type":"tool","id":"c6","name":"glob","state":{"status":"completed",
+		  "input":{"pattern":"*"},"content":[{"type":"text","text":"a\nb\n"}],
+		  "metadata":{"count":100,"truncated":true}},
+		  "time":{"created":1000,"completed":1050}}`,
+		// A tool that returned a file: named by its type, the uri never shown.
+		`{"type":"tool","id":"c8","name":"read","state":{"status":"completed",
+		  "input":{"filePath":"/proj/shot.png"},
+		  "content":[{"type":"text","text":"Image read successfully"},
+		             {"type":"file","uri":"data:image/png;base64,` + image + `","mime":"image/png"}],
+		  "metadata":{"truncated":false}},
+		  "time":{"created":1000,"completed":1030}}`,
+	}, ",")+`]}`)
 
 	m3 := next()
-	d.message("msg_z03", "ses_zoo001", m3, `{"role":"user"}`)
-	dataURI := "data:image/png;base64," + strings.Repeat("QUJD", 50_000) // ~200 KB
-	d.part("prt_z03a", "msg_z03", "ses_zoo001", m3,
-		`{"type":"file","mime":"image/png","filename":"shot.png","url":`+jsonStr(dataURI)+`}`)
-	d.part("prt_z03b", "msg_z03", "ses_zoo001", m3+1, `{"type":"text","text":"see attached"}`)
+	add("msg_z03", "ses_zoo001", "user", m3, `{"time":{"created":`+fmt.Sprint(m3)+`},
+	  "text":"see attached",
+	  "files":[{"name":"shot.png","mime":"image/png","data":"`+image+`",
+	            "source":{"type":"inline"},"mention":{"text":"[Image 1]","start":0,"end":9}}],
+	  "agents":[]}`)
 
+	// Escape mid-turn: the turn carries the error, and the call it cut off has
+	// an error of its own, a start and no end, and no output at all.
 	m4 := next()
-	d.message("msg_z04", "ses_zoo001", m4,
-		`{"role":"assistant","modelID":"glm-5",
-		  "error":{"name":"MessageAbortedError","data":{"message":"Aborted"}}}`)
-	d.part("prt_z04", "msg_z04", "ses_zoo001", m4, `{"type":"text","text":"partial answer"}`)
+	add("msg_z04", "ses_zoo001", "assistant", m4, `{"model":{"id":"glm-5"},
+	  "time":{"created":`+fmt.Sprint(m4)+`},
+	  "error":{"type":"aborted","message":"Aborted"},
+	  "content":[{"type":"text","text":"partial answer"},
+	    {"type":"tool","id":"c9","name":"bash","state":{"status":"error",
+	     "input":{"command":"make test"},
+	     "error":{"type":"tool.interrupted","message":"Tool execution was interrupted"}},
+	     "time":{"created":1000}}]}`)
+	// An error that is not {type, message}: shown as the JSON it is. Off the
+	// minute, so the turns after it keep their stamps.
+	add("msg_z04b", "ses_zoo001", "assistant", m4+30_000, `{"model":{"id":"glm-5"},
+	  "time":{"created":`+fmt.Sprint(m4+30_000)+`},
+	  "error":{"name":"MessageAbortedError","data":{"message":"Aborted"}},
+	  "content":[]}`)
 
-	// Zero parts and no error: must render nothing, not a stray header.
-	d.message("msg_z05", "ses_zoo001", next(), `{"role":"assistant","modelID":"glm-5"}`)
+	// Empty content and no error: must render nothing, not a stray header.
+	add("msg_z05", "ses_zoo001", "assistant", next(), `{"model":{"id":"glm-5"},"content":[]}`)
 
 	m6 := next()
-	d.message("msg_z06", "ses_zoo001", m6, `{"role":"user"}`)
-	d.part("prt_z06", "msg_z06", "ses_zoo001", m6,
-		`{"type":"text","text":"continue where you left off","synthetic":true}`)
+	add("msg_z06", "ses_zoo001", "synthetic", m6, `{"time":{"created":`+fmt.Sprint(m6)+`},
+	  "text":"continue where you left off"}`)
 	// The envelope opencode injects when a background subagent finishes, right
 	// after the synthetic prose above it: one golden shows both, so the record
 	// being read as a record and the prose still being one-lined are the same
 	// diff. It names ses_zoo003, whose banner is in this transcript, so the tag
 	// on the line can be checked against the tag on the banner.
-	d.part("prt_z06b", "msg_z06", "ses_zoo001", m6+1,
-		`{"type":"text","synthetic":true,"text":`+jsonStr(strings.Join([]string{
-			`<task id="ses_zoo003" state="completed">`,
-			`<summary>Background task completed: Sleep 15 seconds in background</summary>`,
-			`<task_result>`,
-			`15 seconds have passed.`,
-			`</task_result>`,
-			`</task>`,
-		}, "\n"))+`}`)
+	add("msg_z06b", "ses_zoo001", "synthetic", m6+1, `{"time":{"created":`+fmt.Sprint(m6+1)+`},
+	  "text":`+jsonStr(strings.Join([]string{
+		`<task id="ses_zoo003" state="completed">`,
+		`<summary>Background task completed: Sleep 15 seconds in background</summary>`,
+		`<task_result>`,
+		`15 seconds have passed.`,
+		`</task_result>`,
+		`</task>`,
+	}, "\n"))+`}`)
 
+	// The summary is tens of KB on a real store and is not drawn.
 	m7 := next()
-	d.message("msg_z07", "ses_zoo001", m7, `{"role":"assistant","modelID":"glm-5"}`)
-	d.part("prt_z07a", "msg_z07", "ses_zoo001", m7,
-		`{"type":"patch","hash":"deadbeefcafe","files":["/proj/a.go","/proj/b.go"]}`)
-	d.part("prt_z07b", "msg_z07", "ses_zoo001", m7+1, `{"type":"compaction","auto":true}`)
+	add("msg_z07", "ses_zoo001", "compaction", m7, `{"status":"completed","reason":"auto",
+	  "summary":"## Objective\nnot for the transcript","recent":"[Assistant reasoning]: neither",
+	  "time":{"created":`+fmt.Sprint(m7)+`}}`)
 
 	d.userText("msg_z08", "ses_zoo003", next(), "do the subtask")
 	// Back to the main session once the subagent has had its turn: the banner
@@ -119,11 +149,15 @@ func zooDB(t *testing.T) *testDB {
 	// Day two, second session: CJK and emoji in body and tool summary.
 	d.userText("msg_z09", "ses_zoo002", day2, "日本語のコマンド 🎌 とても長い行")
 	m10 := day2 + 60_000
-	d.message("msg_z10", "ses_zoo002", m10, `{"role":"assistant","modelID":"glm-5","agent":"build"}`)
-	d.part("prt_z10", "msg_z10", "ses_zoo002", m10,
-		`{"type":"tool","tool":"bash","callID":"c7","state":{"status":"completed",
-		  "input":{"command":"echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く"},
-		  "output":"ok","metadata":{"exit":0},"time":{"start":1000,"end":1500}}}`)
+	add("msg_z10", "ses_zoo002", "assistant", m10, `{"model":{"id":"glm-5"},"agent":"build",
+	  "content":[{"type":"tool","id":"c7","name":"bash","state":{"status":"completed",
+	    "input":{"command":"echo 日本語のコマンド 🎌 とても長い行 もっと長く もっと長く もっと長く"},
+	    "content":[{"type":"text","text":"ok"}],"metadata":{"exit":0}},
+	    "time":{"created":1000,"completed":1500}}]}`)
+	// The session going idle after the turn: no content, nothing drawn, and not
+	// a message in the --list count.
+	add("msg_z11", "ses_zoo002", "idle", m10+30_000,
+		`{"time":{"created":`+fmt.Sprint(m10+30_000)+`},"outcome":"succeeded"}`)
 	return d
 }
 
@@ -291,9 +325,9 @@ func TestTruncatedNoteWithSize(t *testing.T) {
 	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 1234), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	state := &toolState{Output: "abc", Metadata: json.RawMessage(`{"truncated":true,"outputPath":` + jsonStr(path) + `}`)}
+	state := &toolState{Metadata: json.RawMessage(`{"truncated":true,"outputPath":` + jsonStr(path) + `}`)}
 	want := fmt.Sprintf("3 chars shown, full output at %s (1234 bytes)", path)
-	if got := truncatedNote(state); got != want {
+	if got := truncatedNote(state, "abc"); got != want {
 		t.Errorf("truncatedNote = %q, want %q", got, want)
 	}
 }
@@ -403,13 +437,9 @@ func TestOneLineAndSummary(t *testing.T) {
 		t.Errorf("cjk cut: %q", got)
 	}
 
-	state := &toolState{Input: json.RawMessage(`{"pattern":"pat","extra":1}`), Title: "the title"}
+	state := &toolState{Input: json.RawMessage(`{"pattern":"pat","extra":1}`)}
 	if got := toolSummary(state, 100); got != "pat" {
 		t.Errorf("known key wins: %q", got)
-	}
-	state = &toolState{Input: json.RawMessage(`{"unknown":1}`), Title: "the title"}
-	if got := toolSummary(state, 100); got != "the title" {
-		t.Errorf("title fallback: %q", got)
 	}
 	state = &toolState{Input: json.RawMessage(`{"unknown":1}`)}
 	if got := toolSummary(state, 100); got != `{"unknown":1}` {
@@ -505,18 +535,30 @@ func TestSyntheticTask(t *testing.T) {
 }
 
 // TestEmptyReasoningIsNotABody pins the guard the reasoning case shares with
-// text. opencode commits a reasoning part before the model has written a token
-// into it, so a part that exists but is still empty must not fabricate a block:
+// text. opencode commits a reasoning item before the model has written a token
+// into it, so an item that exists but is still empty must not fabricate a block:
 // a header over a blank rail is what a live session printed before this.
 func TestEmptyReasoningIsNotABody(t *testing.T) {
 	d := newTestDB(t)
 	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
 	d.session("ses_a", "", "A", "/p", base)
-	d.message("msg_1", "ses_a", base, `{"role":"assistant","modelID":"m"}`)
-	d.part("prt_1", "msg_1", "ses_a", base+1, `{"type":"step-start"}`)
-	d.part("prt_2", "msg_1", "ses_a", base+2, `{"type":"reasoning","text":"  \n"}`)
+	d.message("msg_1", "ses_a", "assistant", 1, base,
+		`{"model":{"id":"m"},"content":[{"type":"reasoning","text":"  \n"}]}`)
 
 	if got := runArgs(t, d, "", "--reasoning"); strings.Contains(got, "assistant") {
-		t.Errorf("an empty reasoning part printed a turn:\n%s", got)
+		t.Errorf("an empty reasoning item printed a turn:\n%s", got)
+	}
+}
+
+// TestEmptySyntheticIsNotABody is the same guard on a synthetic row: one with
+// no text must not print a head over a blank rail.
+func TestEmptySyntheticIsNotABody(t *testing.T) {
+	d := newTestDB(t)
+	base := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC).UnixMilli()
+	d.session("ses_a", "", "A", "/p", base)
+	d.message("msg_1", "ses_a", "synthetic", 1, base, `{"text":" \n"}`)
+
+	if got := runArgs(t, d, ""); strings.Contains(got, "synthetic") {
+		t.Errorf("an empty synthetic row printed a turn:\n%s", got)
 	}
 }

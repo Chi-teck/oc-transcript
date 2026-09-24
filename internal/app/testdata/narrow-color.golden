@@ -30,7 +30,7 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   [38;5;180m│[0m     [38;5;250m{[0m
   [38;5;180m│[0m       [38;5;250m"url": "http://x"[0m
   [38;5;180m│[0m     [38;5;250m}[0m
-  [38;5;180m│[0m   [38;5;203merr[0m [38;5;250mboom: connection refused[0m
+  [38;5;180m│[0m   [38;5;203merr[0m [38;5;250mtool.execution: boom: connection refused[0m
   [38;5;180m│[0m [38;5;244mbash[0m [38;5;250msleep 999[0m                              [38;5;108m     running[0m
   [38;5;180m│[0m   [38;5;244min[0m
   [38;5;180m│[0m     [38;5;250m{[0m
@@ -60,38 +60,58 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   [38;5;180m│[0m     [38;5;250ma[0m
   [38;5;180m│[0m     [38;5;250mb[0m
   [38;5;180m│[0m   [38;5;244mtruncated[0m [38;5;250m4 chars shown, the rest was not kept[0m
+  [38;5;180m│[0m [38;5;244mread[0m [38;5;250m/proj/shot.png[0m                         [38;5;108m ok[0m[38;5;240m     0.0s[0m
+  [38;5;180m│[0m   [38;5;244min[0m
+  [38;5;180m│[0m     [38;5;250m{[0m
+  [38;5;180m│[0m       [38;5;250m"filePath": "/proj/shot.png"[0m
+  [38;5;180m│[0m     [38;5;250m}[0m
+  [38;5;180m│[0m   [38;5;244mout[0m
+  [38;5;180m│[0m     [38;5;250mImage read successfully[0m
+  [38;5;180m│[0m     [38;5;250mfile (image/png)[0m
 
 
   [38;5;117m│[0m [4;38;5;117m2026-08-17 10:03:00 • user[0m
   [38;5;117m│[0m
-  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mshot.png[0m [38;5;240m(image/png)[0m
-  [38;5;117m│[0m
   [38;5;117m│[0m see attached
+  [38;5;117m│[0m
+  [38;5;117m│[0m [38;5;244mattachment[0m [38;5;250mshot.png[0m [38;5;240m(image/png)[0m
 
 
   [38;5;180m│[0m [4;38;5;180m2026-08-17 10:04:00 • assistant • glm-5 ERROR[0m
   [38;5;180m│[0m
   [38;5;180m│[0m partial answer
   [38;5;180m│[0m
+  [38;5;180m│[0m [38;5;244mbash[0m [38;5;250mmake test[0m                              [1;38;5;203mERR[0m
+  [38;5;180m│[0m   [38;5;244min[0m
+  [38;5;180m│[0m     [38;5;250m{[0m
+  [38;5;180m│[0m       [38;5;250m"command": "make test"[0m
+  [38;5;180m│[0m     [38;5;250m}[0m
+  [38;5;180m│[0m   [38;5;203merr[0m [38;5;250mtool.interrupted: Tool execution was interrupted[0m
+  [38;5;180m│[0m
+  [38;5;180m│[0m   [38;5;203merror[0m [38;5;250maborted: Aborted[0m
+
+
+  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:04:30 • assistant • glm-5 ERROR[0m
+  [38;5;180m│[0m
   [38;5;180m│[0m   [38;5;203merror[0m
   [38;5;180m│[0m   [38;5;250m{"name":"MessageAbortedError","data":{"message":"Abort[0m
   [38;5;180m│[0m   [38;5;250med"}}[0m
 
 
-  [38;5;117m│[0m [4;38;5;117m2026-08-17 10:06:00 • user[0m
-  [38;5;117m│[0m
-  [38;5;117m│[0m [38;5;240m[synthetic][0m continue where you left off
-  [38;5;117m│[0m
-  [38;5;117m│[0m [38;5;240m[synthetic][0m [38;5;244mtask[0m [38;5;183m❬zoo003❭[0m [38;5;250mcompleted:[0m Sleep 15 seconds in
-  [38;5;117m│[0m background
-  [38;5;117m│[0m   [38;5;244mresult[0m [38;5;250m15 seconds have passed.[0m
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:06:00 • synthetic[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m continue where you left off
 
 
-  [38;5;180m│[0m [4;38;5;180m2026-08-17 10:07:00 • assistant • glm-5[0m
-  [38;5;180m│[0m
-  [38;5;180m│[0m [38;5;244mpatch[0m [38;5;250m2 file(s)[0m [38;5;250mdeadbeef[0m
-  [38;5;180m│[0m
-  [38;5;180m│[0m [38;5;240mcontext compacted[0m
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:06:00 • synthetic[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m [38;5;244mtask[0m [38;5;183m❬zoo003❭[0m [38;5;250mcompleted:[0m Sleep 15 seconds in background
+  [38;5;244m│[0m   [38;5;244mresult[0m [38;5;250m15 seconds have passed.[0m
+
+
+  [38;5;244m│[0m [4;38;5;244m2026-08-17 10:07:00 • compaction[0m
+  [38;5;244m│[0m
+  [38;5;244m│[0m [38;5;240mcontext compacted (auto)[0m
 
 
  [1;38;5;183m⚑ ❬zoo003↓❭[0m [38;5;225mSubtask[0m                                   [38;5;183m/proj[0m

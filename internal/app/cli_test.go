@@ -208,10 +208,10 @@ func TestRunEmptyMessages(t *testing.T) {
 		t.Errorf("empty list: %q", got)
 	}
 	// With --all the hint would be useless, so it goes — here everything in
-	// scope is a zero-part assistant turn, which renders nothing.
+	// scope is an assistant turn with no content, which renders nothing.
 	d2 := newTestDB(t)
 	d2.session("ses_b", "", "t", "/p", 1)
-	d2.message("msg_b", "ses_b", 1, `{"role":"assistant"}`)
+	d2.message("msg_b", "ses_b", "assistant", 1, 1, `{"content":[]}`)
 	var so, se bytes.Buffer
 	if err := run([]string{"--db", d2.path, "--everywhere", "--all"}, &so, &se); err != nil {
 		t.Fatal(err)

@@ -38,17 +38,17 @@ func newTestDB(t *testing.T) *testDB {
 	t.Cleanup(func() { _ = db.Close() })
 	for _, stmt := range []string{
 		"pragma journal_mode = wal",
-		// Columns the tool never reads (agent, model, cost) are here so the
-		// fixture keeps the same shape as the real store.
-		`create table session (id text primary key, parent_id text, title text,
-		   directory text, agent text, model text, time_created integer,
+		// Columns the tool never reads (agent, model, cost, version) are here so
+		// the fixture keeps the same shape as the real store.
+		`create table session_v2 (id text primary key, parent_id text, title text,
+		   directory text, agent text, model text, version text, time_created integer,
 		   time_updated integer, cost real, tokens_input integer,
 		   tokens_output integer, tokens_cache_read integer,
 		   tokens_cache_write integer)`,
-		`create table message (id text primary key, session_id text,
-		   time_created integer, data text)`,
-		`create table part (id text primary key, message_id text, session_id text,
-		   time_created integer, data text)`,
+		`create table session_message (id text primary key, session_id text,
+		   type text not null, seq integer not null, time_created integer,
+		   time_updated integer, data text)`,
+		`create unique index session_message_seq on session_message (session_id, seq)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
 			t.Fatal(err)
@@ -67,7 +67,7 @@ func (d *testDB) session(id, parent, title, dir string, ts int64) {
 		ttl = title
 	}
 	if _, err := d.db.Exec(
-		"insert into session (id, parent_id, title, directory, time_created) values (?,?,?,?,?)",
+		"insert into session_v2 (id, parent_id, title, directory, time_created) values (?,?,?,?,?)",
 		id, p, ttl, dir, ts); err != nil {
 		d.t.Fatal(err)
 	}
@@ -80,36 +80,41 @@ func (d *testDB) session(id, parent, title, dir string, ts int64) {
 func (d *testDB) spent(id string, updated, in, out, cacheRead, cacheWrite int64) {
 	d.t.Helper()
 	if _, err := d.db.Exec(
-		`update session set time_updated = ?, tokens_input = ?, tokens_output = ?,
+		`update session_v2 set time_updated = ?, tokens_input = ?, tokens_output = ?,
 		   tokens_cache_read = ?, tokens_cache_write = ? where id = ?`,
 		updated, in, out, cacheRead, cacheWrite, id); err != nil {
 		d.t.Fatal(err)
 	}
 }
 
-func (d *testDB) message(id, sid string, ts int64, data string) {
+// message adds one session_message row. seq is the per-session position the
+// store assigns, unique within a session.
+func (d *testDB) message(id, sid, typ string, seq, ts int64, data string) {
 	d.t.Helper()
 	if _, err := d.db.Exec(
-		"insert into message (id, session_id, time_created, data) values (?,?,?,?)",
-		id, sid, ts, data); err != nil {
+		`insert into session_message (id, session_id, type, seq, time_created, time_updated, data)
+		   values (?,?,?,?,?,?,?)`,
+		id, sid, typ, seq, ts, ts, data); err != nil {
 		d.t.Fatal(err)
 	}
 }
 
-func (d *testDB) part(id, mid, sid string, ts int64, data string) {
+// nextSeq is the seq a row appended to the session now would take.
+func (d *testDB) nextSeq(sid string) int64 {
 	d.t.Helper()
-	if _, err := d.db.Exec(
-		"insert into part (id, message_id, session_id, time_created, data) values (?,?,?,?,?)",
-		id, mid, sid, ts, data); err != nil {
+	var n int64
+	if err := d.db.QueryRow("select coalesce(max(seq), 0) + 1 from session_message where session_id = ?",
+		sid).Scan(&n); err != nil {
 		d.t.Fatal(err)
 	}
+	return n
 }
 
-// userText adds a one-part user message and returns nothing it doesn't need to.
+// userText appends a user message holding only text.
 func (d *testDB) userText(mid, sid string, ts int64, text string) {
 	d.t.Helper()
-	d.message(mid, sid, ts, `{"role":"user","time":{"created":`+fmt.Sprint(ts)+`}}`)
-	d.part("prt_"+mid, mid, sid, ts, `{"type":"text","text":`+jsonStr(text)+`}`)
+	d.message(mid, sid, "user", d.nextSeq(sid), ts,
+		`{"time":{"created":`+fmt.Sprint(ts)+`},"text":`+jsonStr(text)+`}`)
 }
 
 func jsonStr(s string) string {
@@ -150,10 +155,40 @@ func TestOpenStoreErrors(t *testing.T) {
 	}
 }
 
+// A database opencode 2 has not migrated has only the v1 tables. It must be
+// refused at open, by name, rather than failing later on a missing table.
+func TestOpenStorePreV2(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opencode.db")
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`create table session (id text primary key, directory text, time_created integer)`,
+		`create table message (id text primary key, session_id text, time_created integer, data text)`,
+		`create table part (id text primary key, message_id text, session_id text, time_created integer, data text)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err := openStore(context.Background(), path)
+	if err == nil {
+		_ = st.Close()
+		t.Fatal("a pre-v2 database opened")
+	}
+	if !strings.Contains(err.Error(), "is not an opencode 2 database") {
+		t.Errorf("pre-v2 database: %v", err)
+	}
+}
+
 func TestStoreIsReadOnly(t *testing.T) {
 	d := newTestDB(t)
 	st := d.open(t)
-	if _, err := st.db.Exec("insert into session (id, directory, time_created) values ('x','/x',1)"); err == nil {
+	if _, err := st.db.Exec("insert into session_v2 (id, directory, time_created) values ('x','/x',1)"); err == nil {
 		t.Fatal("write on the read-only handle succeeded")
 	}
 }
@@ -205,7 +240,8 @@ func TestSessionScoping(t *testing.T) {
 
 // TestMessagesChunkedMerge is the regression test for the unchunked IN list:
 // 1200 sessions exceed the pre-3.32 variable limit of 999, and the chunked
-// results must merge into exactly the order one statement would have given.
+// results must merge into exactly the order one statement would have given —
+// time_created, then seq, then id.
 func TestMessagesChunkedMerge(t *testing.T) {
 	d := newTestDB(t)
 	tx, err := d.db.Begin()
@@ -215,26 +251,28 @@ func TestMessagesChunkedMerge(t *testing.T) {
 	const n = 1200
 	ids := make([]string, n)
 	type key struct {
-		ts int64
-		id string
+		ts, seq int64
+		id      string
 	}
 	var want []key
 	for i := range n {
 		sid := fmt.Sprintf("ses_%04d", i)
 		ids[i] = sid
-		if _, err := tx.Exec("insert into session (id, directory, time_created) values (?,?,?)",
+		if _, err := tx.Exec("insert into session_v2 (id, directory, time_created) values (?,?,?)",
 			sid, "/p", int64(i)); err != nil {
 			t.Fatal(err)
 		}
 		// Timestamps interleave across chunks, and rows tie every 100 apart so
-		// the id tiebreak matters; message ids run opposite to session ids.
+		// the tiebreaks matter: seq cycles through three values, and message ids
+		// run opposite to session ids, so among rows equal on both the id decides.
 		ts := int64((i * 7) % 100)
+		seq := int64(i % 3)
 		mid := fmt.Sprintf("msg_%04d", n-1-i)
-		if _, err := tx.Exec("insert into message (id, session_id, time_created, data) values (?,?,?,?)",
-			mid, sid, ts, `{"role":"user"}`); err != nil {
+		if _, err := tx.Exec("insert into session_message (id, session_id, type, seq, time_created, data) values (?,?,?,?,?,?)",
+			mid, sid, "user", seq, ts, `{}`); err != nil {
 			t.Fatal(err)
 		}
-		want = append(want, key{ts, mid})
+		want = append(want, key{ts, seq, mid})
 	}
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
@@ -242,6 +280,9 @@ func TestMessagesChunkedMerge(t *testing.T) {
 	slices.SortFunc(want, func(a, b key) int {
 		if a.ts != b.ts {
 			return int(a.ts - b.ts)
+		}
+		if a.seq != b.seq {
+			return int(a.seq - b.seq)
 		}
 		return strings.Compare(a.id, b.id)
 	})
@@ -255,8 +296,9 @@ func TestMessagesChunkedMerge(t *testing.T) {
 		t.Fatalf("messages = %d, want %d", len(got), n)
 	}
 	for i, m := range got {
-		if m.timeCreated != want[i].ts || m.id != want[i].id {
-			t.Fatalf("row %d = (%d, %s), want (%d, %s)", i, m.timeCreated, m.id, want[i].ts, want[i].id)
+		if m.timeCreated != want[i].ts || m.seq != want[i].seq || m.id != want[i].id {
+			t.Fatalf("row %d = (%d, %d, %s), want (%d, %d, %s)",
+				i, m.timeCreated, m.seq, m.id, want[i].ts, want[i].seq, want[i].id)
 		}
 	}
 }
@@ -265,7 +307,7 @@ func TestMessagesWindowAndCursor(t *testing.T) {
 	d := newTestDB(t)
 	d.session("ses_a", "", "", "/p", 1)
 	for i, ts := range []int64{10, 20, 20, 30} {
-		d.message(fmt.Sprintf("msg_%d", i), "ses_a", ts, `{"role":"user"}`)
+		d.message(fmt.Sprintf("msg_%d", i), "ses_a", "user", int64(i+1), ts, `{}`)
 	}
 	st := d.open(t)
 	ctx := context.Background()
@@ -280,7 +322,7 @@ func TestMessagesWindowAndCursor(t *testing.T) {
 	}
 
 	// The keyset cursor takes the second of two rows sharing a millisecond.
-	after, err := st.messages(ctx, []string{"ses_a"}, messageQuery{after: &cursor{timeCreated: 20, id: "msg_1"}})
+	after, err := st.messages(ctx, []string{"ses_a"}, messageQuery{after: &cursor{timeCreated: 20, seq: 2, id: "msg_1"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,28 +331,70 @@ func TestMessagesWindowAndCursor(t *testing.T) {
 	}
 }
 
-func TestPartsOrderAndZeroParts(t *testing.T) {
+// TestMessagesSeqBeforeID pins the case seq is in the order for: the v2
+// migration split a v1 message into two rows sharing a time_created, and the
+// random id tail sorts them against the order they were written in. seq has
+// to win, in the query and across a cursor placed between the two — an
+// id-keyed cursor there would re-read the first row or skip the second.
+func TestMessagesSeqBeforeID(t *testing.T) {
 	d := newTestDB(t)
 	d.session("ses_a", "", "", "/p", 1)
-	d.message("msg_1", "ses_a", 10, `{"role":"user"}`)
-	d.message("msg_2", "ses_a", 20, `{"role":"assistant"}`) // zero parts
-	// Ids sort against timestamps: time order must win.
-	d.part("prt_z", "msg_1", "ses_a", 1, `{"type":"text","text":"one"}`)
-	d.part("prt_a", "msg_1", "ses_a", 2, `{"type":"text","text":"two"}`)
-	d.part("prt_b", "msg_1", "ses_a", 2, `{"type":"text","text":"three"}`)
+	d.message("msg_0", "ses_a", "user", 1, 10, `{}`)
+	d.message("msg_x9", "ses_a", "user", 2, 20, `{}`)      // written first, sorts last by id
+	d.message("msg_x1", "ses_a", "synthetic", 3, 20, `{}`) // written second, sorts first by id
+	d.message("msg_2", "ses_a", "assistant", 4, 30, `{}`)
 	st := d.open(t)
-	got, err := st.parts(context.Background(), []string{"msg_1", "msg_2"})
+	ctx := context.Background()
+
+	ids := func(rows []messageRow) []string {
+		var out []string
+		for _, r := range rows {
+			out = append(out, r.id)
+		}
+		return out
+	}
+	all, err := st.messages(ctx, []string{"ses_a"}, messageQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var order []string
-	for _, p := range got["msg_1"] {
-		order = append(order, p.id)
+	if got, want := ids(all), []string{"msg_0", "msg_x9", "msg_x1", "msg_2"}; !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
 	}
-	if want := []string{"prt_z", "prt_a", "prt_b"}; !slices.Equal(order, want) {
-		t.Errorf("part order = %v, want %v", order, want)
+
+	between, err := st.messages(ctx, []string{"ses_a"},
+		messageQuery{after: &cursor{timeCreated: 20, seq: 2, id: "msg_x9"}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(got["msg_2"]) != 0 {
-		t.Errorf("zero-part message got parts: %v", got["msg_2"])
+	if got, want := ids(between), []string{"msg_x1", "msg_2"}; !slices.Equal(got, want) {
+		t.Errorf("after the first of the pair = %v, want %v", got, want)
+	}
+
+	past, err := st.messages(ctx, []string{"ses_a"},
+		messageQuery{after: &cursor{timeCreated: 20, seq: 3, id: "msg_x1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids(past), []string{"msg_2"}; !slices.Equal(got, want) {
+		t.Errorf("after the second of the pair = %v, want %v", got, want)
+	}
+}
+
+// Every row but an idle one is a message: idle marks the end of a turn and
+// carries nothing, while synthetic and compaction rows were v1 user messages.
+func TestMessageCountsSkipIdle(t *testing.T) {
+	d := newTestDB(t)
+	d.session("ses_a", "", "", "/p", 1)
+	d.session("ses_b", "", "", "/p", 2)
+	for i, typ := range []string{"user", "assistant", "synthetic", "compaction", "idle", "idle"} {
+		d.message(fmt.Sprintf("msg_a%d", i), "ses_a", typ, int64(i+1), int64(10+i), `{}`)
+	}
+	d.message("msg_b0", "ses_b", "idle", 1, 10, `{}`)
+	got, err := d.open(t).messageCounts(context.Background(), []string{"ses_a", "ses_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["ses_a"] != 4 || got["ses_b"] != 0 {
+		t.Errorf("counts = %v, want ses_a 4 and ses_b 0", got)
 	}
 }

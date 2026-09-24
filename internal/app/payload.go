@@ -2,22 +2,32 @@ package app
 
 import "encoding/json"
 
-// Typed views of the JSON the store keeps in message.data and part.data. Only
-// what the renderer reads is declared; everything else passes through. Fields
-// the store is loose about are flexString or json.RawMessage so one odd value
-// does not take a whole row down.
+// Typed views of the JSON the store keeps in session_message.data. Only what
+// the renderer reads is declared; everything else passes through. Fields the
+// store is loose about are flexString or json.RawMessage so one odd value does
+// not take a whole row down.
 //
 // This is the shape of what the store hands over, not a rendering decision, so
-// it sits beside the store rather than inside the renderer: how a patch part is
-// drawn changes often and what a patch part contains does not.
+// it sits beside the store rather than inside the renderer: how a tool item is
+// drawn changes often and what a tool item contains does not.
 
 type messageData struct {
-	Role    flexString      `json:"role"`
-	ModelID flexString      `json:"modelID"`
-	Variant flexString      `json:"variant"`
-	Agent   flexString      `json:"agent"`
-	Error   json.RawMessage `json:"error"`
-	Time    *messageTime    `json:"time"`
+	Agent   flexString        `json:"agent"`
+	Model   *modelRef         `json:"model"`
+	Error   json.RawMessage   `json:"error"`
+	Time    *messageTime      `json:"time"`
+	Text    flexString        `json:"text"`    // user, synthetic
+	Files   []userFile        `json:"files"`   // user
+	Content []json.RawMessage `json:"content"` // assistant; decoded per item so one bad item is skipped, not the turn
+	Tokens  *stepTokens       `json:"tokens"`
+	Cost    json.RawMessage   `json:"cost"`
+	Finish  flexString        `json:"finish"`
+	Reason  flexString        `json:"reason"` // compaction
+}
+
+type modelRef struct {
+	ID      flexString `json:"id"`
+	Variant flexString `json:"variant"`
 }
 
 // messageTime is the turn's own clock. Only `completed` is read: its presence
@@ -26,34 +36,43 @@ type messageTime struct {
 	Completed json.RawMessage `json:"completed"`
 }
 
-type partData struct {
-	Type      flexString      `json:"type"`
-	Text      flexString      `json:"text"`
-	Synthetic json.RawMessage `json:"synthetic"`
-	Tool      flexString      `json:"tool"`
-	State     *toolState      `json:"state"`
-	Filename  json.RawMessage `json:"filename"`
-	Mime      json.RawMessage `json:"mime"`
-	Files     json.RawMessage `json:"files"`
-	Hash      flexString      `json:"hash"`
-	Tokens    *stepTokens     `json:"tokens"`
-	Cost      json.RawMessage `json:"cost"`
-	Reason    flexString      `json:"reason"`
+// userFile is an attachment on a user message. The payload sits beside name
+// and mime as base64; it is not declared, so the decoder skips it.
+type userFile struct {
+	Name flexString `json:"name"`
+	Mime flexString `json:"mime"`
+}
+
+// contentItem is one entry of an assistant message's content: text, reasoning
+// or tool.
+type contentItem struct {
+	Type  flexString `json:"type"`
+	Text  flexString `json:"text"`
+	Name  flexString `json:"name"`
+	ID    flexString `json:"id"`
+	State *toolState `json:"state"`
+	Time  *toolTime  `json:"time"`
 }
 
 type toolState struct {
 	Status   flexString      `json:"status"`
 	Input    json.RawMessage `json:"input"` // no schema; kept raw so the in: block keeps the source key order
-	Output   flexString      `json:"output"`
 	Metadata json.RawMessage `json:"metadata"`
-	Title    flexString      `json:"title"`
-	Time     *toolTime       `json:"time"`
-	Error    flexString      `json:"error"`
+	Error    json.RawMessage `json:"error"`
+	Content  []toolOutput    `json:"content"`
+}
+
+// toolOutput is one item of a tool's output: text, or a file whose uri is an
+// image of 60–550 KB of base64. The uri is not declared, so it is never decoded.
+type toolOutput struct {
+	Type flexString `json:"type"`
+	Text flexString `json:"text"`
+	Mime flexString `json:"mime"`
 }
 
 type toolTime struct {
-	Start json.RawMessage `json:"start"`
-	End   json.RawMessage `json:"end"`
+	Created   json.RawMessage `json:"created"`
+	Completed json.RawMessage `json:"completed"`
 }
 
 type toolMetadata struct {
@@ -70,15 +89,19 @@ type stepTokens struct {
 	} `json:"cache"`
 }
 
-// stringOr reads a string field: absent or null gives the default, a string
-// gives itself, anything else its compact JSON.
-func stringOr(raw json.RawMessage, dflt string) string {
+// errorText renders a turn or tool error, stored as {type, message}, as
+// "<type>: <message>". Any other shape prints as its compact JSON; absent or
+// null gives "".
+func errorText(raw json.RawMessage) string {
 	if raw == nil || string(raw) == "null" {
-		return dflt
+		return ""
 	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		return s
+	var e struct {
+		Type    *string `json:"type"`
+		Message *string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &e); err == nil && e.Type != nil && e.Message != nil {
+		return *e.Type + ": " + *e.Message
 	}
 	return reformatJSON(raw, -1)
 }

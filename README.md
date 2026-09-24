@@ -31,6 +31,8 @@ rather than an anecdote.
 
 ## Install
 
+Requires opencode 2.x.
+
 Grab an archive for your platform from the
 [releases page](https://github.com/Chi-teck/oc-transcript/releases), or install it with the
 Go toolchain:

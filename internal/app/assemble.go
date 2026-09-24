@@ -120,14 +120,6 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 			messages = messages[:n]
 		}
 	}
-	mids := make([]string, len(messages))
-	for i, m := range messages {
-		mids[i] = m.id
-	}
-	parts, err := st.parts(ctx, mids)
-	if err != nil {
-		return nil, err
-	}
 
 	// Messages render independently, so the JSON decoding — the bulk of the
 	// work — fans out across cores; assembly below stays sequential, so the
@@ -142,7 +134,7 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 				if i >= len(messages) {
 					return
 				}
-				blocks[i] = renderMessage(messages[i], parts[messages[i].id], opts)
+				blocks[i] = renderMessage(messages[i], opts)
 			}
 		})
 	}
@@ -186,7 +178,7 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 			gap(turnGap)
 		}
 		t.lines = append(t.lines, block...)
-		t.last = &cursor{timeCreated: msg.timeCreated, id: msg.id}
+		t.last = &cursor{timeCreated: msg.timeCreated, seq: msg.seq, id: msg.id}
 	}
 	if len(t.lines) > 0 {
 		gap(endGap)
@@ -214,7 +206,7 @@ func build(ctx context.Context, st *store, opts *options, q messageQuery, prev s
 // A message is settled when it cannot grow any more parts:
 //
 //	a newer message exists in the same session // a next turn implies this one is done
-//	role != "assistant"                        // a prompt is written whole
+//	type != "assistant"                        // a prompt, synthetic, compaction or idle row is written whole
 //	data.error is set                          // aborted or failed
 //	data.time.completed is set                 // finished normally
 //
@@ -250,7 +242,7 @@ func settled(msg messageRow) bool {
 		return true // renderMessage warns about it; the gate does not double up
 	}
 	switch {
-	case string(data.Role) != "assistant":
+	case msg.typ != "assistant":
 		return true
 	case truthy(data.Error):
 		return true

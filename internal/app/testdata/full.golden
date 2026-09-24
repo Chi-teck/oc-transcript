@@ -33,7 +33,7 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   │     {
   │       "url": "http://x"
   │     }
-  │   err boom: connection refused
+  │   err tool.execution: boom: connection refused
   │ bash sleep 999                                                                           running
   │   in
   │     {
@@ -62,37 +62,58 @@ zoo003↓  2026-08-17 10:00  /proj      Subtask
   │     a
   │     b
   │   truncated 4 chars shown, the rest was not kept
+  │ read /proj/shot.png                                                                  ok     0.0s
+  │   in
+  │     {
+  │       "filePath": "/proj/shot.png"
+  │     }
+  │   out
+  │     Image read successfully
+  │     file (image/png)
   │
   │ tokens 10 in 5 out 1 cached 2 written $0.0123 tool-calls
 
 
   │ 2026-08-17 10:03:00 • user
   │
-  │ attachment shot.png (image/png)
-  │
   │ see attached
+  │
+  │ attachment shot.png (image/png)
 
 
   │ 2026-08-17 10:04:00 • assistant • glm-5 ERROR
   │
   │ partial answer
   │
+  │ bash make test                                                                      ERR
+  │   in
+  │     {
+  │       "command": "make test"
+  │     }
+  │   err tool.interrupted: Tool execution was interrupted
+  │
+  │   error aborted: Aborted
+
+
+  │ 2026-08-17 10:04:30 • assistant • glm-5 ERROR
+  │
   │   error {"name":"MessageAbortedError","data":{"message":"Aborted"}}
 
 
-  │ 2026-08-17 10:06:00 • user
+  │ 2026-08-17 10:06:00 • synthetic
   │
-  │ [synthetic] continue where you left off
+  │ continue where you left off
+
+
+  │ 2026-08-17 10:06:00 • synthetic
   │
-  │ [synthetic] task ❬zoo003❭ completed: Sleep 15 seconds in background
+  │ task ❬zoo003❭ completed: Sleep 15 seconds in background
   │   result 15 seconds have passed.
 
 
-  │ 2026-08-17 10:07:00 • assistant • glm-5
+  │ 2026-08-17 10:07:00 • compaction
   │
-  │ patch 2 file(s) deadbeef
-  │
-  │ context compacted
+  │ context compacted (auto)
 
 
  ⚑ ❬zoo003↓❭ Subtask                                                                           /proj

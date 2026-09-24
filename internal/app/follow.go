@@ -10,9 +10,9 @@ import (
 // follow polls for messages newer than what has been printed and appends each
 // turn once it has settled — see settledPrefix — until interrupted.
 //
-// The cursor is a keyset — the (time_created, id) of the last message actually
+// The cursor is a keyset — the (time_created, seq, id) of the last message actually
 // emitted — and each round asks for rows strictly past it, in the same
-// (time_created, id) order the transcript is read in. That is race-free even
+// (time_created, seq, id) order the transcript is read in. That is race-free even
 // for rows sharing a millisecond, which a wall-clock cursor cannot separate
 // and so re-emits or drops. Until something has been emitted the window's
 // own start bounds the poll, so nothing between the opening transcript and

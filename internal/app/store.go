@@ -14,8 +14,8 @@ import (
 )
 
 // The store is opened read-only and nothing here writes to it. The traps this
-// code steps around: scope by session.directory, order by time_created with id
-// only as a tiebreaker, chunk every IN (…) list.
+// code steps around: scope by session_v2.directory, order by time_created with
+// seq, then id, as tiebreakers, chunk every IN (…) list.
 
 // chunkSize bounds the bound-parameter count of one statement. The ceiling
 // varies by SQLite build (999 before 3.32), so never rely on the ambient limit.
@@ -39,20 +39,15 @@ type sessionRow struct {
 }
 
 type messageRow struct {
-	id, sessionID string
-	timeCreated   int64
-	data          []byte
-}
-
-type partRow struct {
-	id, messageID string
-	timeCreated   int64
-	data          []byte
+	id, sessionID, typ string
+	timeCreated, seq   int64
+	data               []byte
 }
 
 // openStore opens the database read-only and probes it, so a missing file, an
-// unreadable WAL or a file that is not a database all fail here, with a
-// one-line message, rather than on the first query.
+// unreadable WAL, a file that is not a database or a database opencode 2 has
+// not migrated all fail here, with a one-line message, rather than on the first
+// query.
 func openStore(ctx context.Context, path string) (*store, error) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -76,7 +71,12 @@ func openStore(ctx context.Context, path string) (*store, error) {
 		err = db.PingContext(ctx)
 		if err == nil {
 			var n int
-			err = db.QueryRowContext(ctx, "select count(*) from sqlite_master").Scan(&n)
+			err = db.QueryRowContext(ctx, "select count(*) from sqlite_master"+
+				" where type='table' and name='session_message'").Scan(&n)
+			if err == nil && n == 0 {
+				_ = db.Close()
+				return nil, fmt.Errorf("%s is not an opencode 2 database", path)
+			}
 		}
 	}
 	if err != nil {
@@ -121,7 +121,7 @@ func (s *store) sessions(ctx context.Context, root string) ([]sessionRow, error)
 	      coalesce(tokens_cache_read, 0) + coalesce(tokens_cache_write, 0),
 	    tokens_input is not null or tokens_output is not null or
 	      tokens_cache_read is not null or tokens_cache_write is not null
-	  from session`
+	  from session_v2`
 	var args []any
 	if root != "" {
 		// The boundary is the platform's separator: a Windows opencode stores
@@ -167,14 +167,16 @@ func (s *store) sessions(ctx context.Context, root string) ([]sessionRow, error)
 // one of them that did.
 //
 // It is a count of messages and not of the blocks a transcript draws from them.
-// A turn that left no parts behind renders as nothing and is still a message,
-// so a session can show more here than a reader can count below it — and a
-// subagent is a session of its own, so a parent's count stops at its own turns.
+// Every row but an idle one counts: idle marks the end of a turn and carries
+// nothing. An assistant turn that left no content behind renders as nothing and
+// is still a message, so a session can show more here than a reader can count
+// below it — and a subagent is a session of its own, so a parent's count stops
+// at its own turns.
 func (s *store) messageCounts(ctx context.Context, ids []string) (map[string]int, error) {
 	out := make(map[string]int, len(ids))
 	for chunk := range slices.Chunk(ids, chunkSize) {
-		query := "select session_id, count(*) from message where session_id in (" +
-			placeholders(len(chunk)) + ") group by session_id"
+		query := "select session_id, count(*) from session_message where session_id in (" +
+			placeholders(len(chunk)) + ") and type <> 'idle' group by session_id"
 		rows, err := s.db.QueryContext(ctx, query, anySlice(chunk)...)
 		err = scanAll(rows, err, func(rows *sql.Rows) error {
 			var sid string
@@ -192,36 +194,41 @@ func (s *store) messageCounts(ctx context.Context, ids []string) (map[string]int
 	return out, nil
 }
 
-// cursor is a keyset position in the (time_created, id) order messages are
-// read in: the row it names has been emitted, everything after it has not.
+// cursor is a keyset position in the (time_created, seq, id) order messages
+// are read in: the row it names has been emitted, everything after it has not.
 type cursor struct {
-	timeCreated int64
-	id          string
+	timeCreated, seq int64
+	id               string
 }
 
 // messageQuery bounds a messages() call. since/until are the --since/--until
 // window (nil = open); after, when set, replaces since with "strictly past
-// this row", which is what --follow needs to be race-free.
+// this row" in (time_created, seq, id) order, which is what --follow needs to
+// be race-free.
 type messageQuery struct {
 	since, until *int64
 	after        *cursor
 }
 
 // messages returns the messages of the given sessions inside the query bounds,
-// ordered by (time_created, id). The id list is chunked, so the result is
-// merged and re-sorted; SQLite's default BINARY collation is byte order, the
-// same as strings.Compare, so the merged order is what one statement would
-// have produced.
+// ordered by (time_created, seq, id). seq comes before id because the v2
+// migration split some messages into rows that share a time_created, and only
+// seq keeps them in the order they were written. The id list is chunked, so
+// the result is merged and re-sorted; SQLite's default BINARY collation is
+// byte order, the same as strings.Compare, so the merged order is what one
+// statement would have produced.
 func (s *store) messages(ctx context.Context, ids []string, q messageQuery) ([]messageRow, error) {
 	var out []messageRow
 	for chunk := range slices.Chunk(ids, chunkSize) {
-		query := "select id, session_id, time_created, data from message where session_id in (" +
+		query := "select id, session_id, type, seq, time_created, data from session_message where session_id in (" +
 			placeholders(len(chunk)) + ")"
 		args := anySlice(chunk)
 		switch {
 		case q.after != nil:
-			query += " and (time_created > ? or (time_created = ? and id > ?))"
-			args = append(args, q.after.timeCreated, q.after.timeCreated, q.after.id)
+			query += " and (time_created > ? or (time_created = ? and" +
+				" (seq > ? or (seq = ? and id > ?))))"
+			args = append(args, q.after.timeCreated, q.after.timeCreated,
+				q.after.seq, q.after.seq, q.after.id)
 		case q.since != nil:
 			query += " and time_created >= ?"
 			args = append(args, *q.since)
@@ -230,11 +237,11 @@ func (s *store) messages(ctx context.Context, ids []string, q messageQuery) ([]m
 			query += " and time_created < ?"
 			args = append(args, *q.until)
 		}
-		query += " order by time_created, id"
+		query += " order by time_created, seq, id"
 		rows, err := s.db.QueryContext(ctx, query, args...)
 		err = scanAll(rows, err, func(rows *sql.Rows) error {
 			var r messageRow
-			if err := rows.Scan(&r.id, &r.sessionID, &r.timeCreated, &r.data); err != nil {
+			if err := rows.Scan(&r.id, &r.sessionID, &r.typ, &r.seq, &r.timeCreated, &r.data); err != nil {
 				return err
 			}
 			out = append(out, r)
@@ -248,31 +255,11 @@ func (s *store) messages(ctx context.Context, ids []string, q messageQuery) ([]m
 		if a.timeCreated != b.timeCreated {
 			return cmp.Compare(a.timeCreated, b.timeCreated)
 		}
+		if a.seq != b.seq {
+			return cmp.Compare(a.seq, b.seq)
+		}
 		return strings.Compare(a.id, b.id)
 	})
-	return out, nil
-}
-
-// parts returns the parts of the given messages, keyed by message, each list
-// in (time_created, id) order.
-func (s *store) parts(ctx context.Context, messageIDs []string) (map[string][]partRow, error) {
-	out := map[string][]partRow{}
-	for chunk := range slices.Chunk(messageIDs, chunkSize) {
-		query := "select id, message_id, time_created, data from part where message_id in (" +
-			placeholders(len(chunk)) + ") order by time_created, id"
-		rows, err := s.db.QueryContext(ctx, query, anySlice(chunk)...)
-		err = scanAll(rows, err, func(rows *sql.Rows) error {
-			var r partRow
-			if err := rows.Scan(&r.id, &r.messageID, &r.timeCreated, &r.data); err != nil {
-				return err
-			}
-			out[r.messageID] = append(out[r.messageID], r)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
 	return out, nil
 }
 

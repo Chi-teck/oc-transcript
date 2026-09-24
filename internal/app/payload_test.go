@@ -5,34 +5,30 @@ import (
 	"testing"
 )
 
-// stringOr is what puts a name and a type on an attachment line, so a field the
-// store left out and a field the store wrote as null have to come back the
-// same: both mean the store does not say, and both should read as the caller's
-// placeholder rather than as a hole where a name belongs.
-//
-// The null case used to fall through to a branch that could never run —
-// encoding/json unmarshals null into a string as a no-op and reports no error,
-// so the check for it sat below a return that had already been taken — and an
-// explicit null came back empty.
-func TestStringOr(t *testing.T) {
+// errorText draws a turn or tool error. The {type, message} shape reads as
+// one phrase; anything else is shown as the JSON it is rather than dropped,
+// and an error the store did not write is no text at all.
+func TestErrorText(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		raw  string
 		want string
 	}{
-		{"absent", "", "?"},
-		{"null", "null", "?"},
-		{"a string", `"shot.png"`, "shot.png"},
-		{"an empty string is a value, not an absence", `""`, ""},
-		{"not a string at all", `{"a":1}`, `{"a":1}`},
-		{"a number", "12", "12"},
+		{"absent", "", ""},
+		{"null", "null", ""},
+		{"type and message", `{"type":"aborted","message":"Aborted"}`, "aborted: Aborted"},
+		{"extra keys are ignored", `{"message":"boom","type":"tool.execution","code":1}`, "tool.execution: boom"},
+		{"no message", `{"type":"aborted"}`, `{"type":"aborted"}`},
+		{"another shape", `{"name":"MessageAbortedError","data":{"message":"Aborted"}}`,
+			`{"name":"MessageAbortedError","data":{"message":"Aborted"}}`},
+		{"a bare string", `"boom"`, `"boom"`},
 	} {
 		var raw json.RawMessage
 		if c.raw != "" {
 			raw = json.RawMessage(c.raw)
 		}
-		if got := stringOr(raw, "?"); got != c.want {
-			t.Errorf("%s: stringOr(%s) = %q, want %q", c.name, c.raw, got, c.want)
+		if got := errorText(raw); got != c.want {
+			t.Errorf("%s: errorText(%s) = %q, want %q", c.name, c.raw, got, c.want)
 		}
 	}
 }
